@@ -1,5 +1,6 @@
 module AMQPClient
 
-# package code goes here
+include("types.jl")
+include("spec.jl")
 
 end # module
