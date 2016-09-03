@@ -42,9 +42,13 @@ end
 
 typealias TAMQPFieldName TAMQPShortStr
 
-immutable TAMQPFieldValue
+immutable TAMQPFieldValue{T}
     typ::Char  # as in FieldValueIndicatorMap
-    fld::Any
+    fld::T
+end
+function TAMQPFieldValue(typ::Char, fld)
+    T = FieldValueIndicatorMap[typ]
+    TAMQPFieldValue{T}(typ, fld)
 end
 
 immutable TAMQPFieldValuePair
@@ -97,22 +101,36 @@ immutable TAMQPFrameProperties
     payloadsize::TAMQPPayloadSize
 end
 
-immutable TAMQPMethodPayload
-    class::TAMQPClassId
-    method::TAMQPMethodId
-    fields::Vector{TAMQPField}
-end
-
-immutable TAMQPMethodFrame
-    hdr::UInt8   # must be 1
-    props::TAMQPFrameProperties
-    payload::TAMQPMethodPayload
-    fend::UInt8  # must be FrameEnd
-end
-
 immutable TAMQPPropertyFlags
     hdr::UInt16
     nextval::Nullable{TAMQPPropertyFlags}
+end
+
+immutable TAMQPBodyPayload
+    data::Vector{TAMQPOctet}
+end
+
+immutable TAMQPMethodPayload
+    class::TAMQPClassId
+    method::TAMQPMethodId
+    fields::Vector{Pair{Symbol,TAMQPField}}
+
+    TAMQPMethodPayload(p::TAMQPBodyPayload) = TAMQPMethodPayload(p.data)
+    TAMQPMethodPayload(b::Vector{TAMQPOctet}) = TAMQPMethodPayload(IOBuffer(b))
+    function TAMQPMethodPayload(io)
+        class = ntoh(read(io, TAMQPClassId))
+        method = ntoh(read(io, TAMQPMethodId))
+        args = methodargs(class, method)
+        fields = Array(Pair{Symbol,TAMQPField}, length(args))
+        @logmsg("reading method payload class:$class, method:$method, nargs:$(length(args))")
+        for idx in 1:length(fields)
+            fld = args[idx]
+            v = read(io, fld.second)
+            issubtype(fld.second, Integer) && (v = ntoh(v))
+            fields[idx] = Pair{Symbol,TAMQPField}(fld.first, v)
+        end
+        new(class, method, fields)
+    end
 end
 
 immutable TAMQPHeaderPayload
@@ -123,26 +141,90 @@ immutable TAMQPHeaderPayload
     proplist::Vector{TAMQPField}
 end
 
-immutable TAMQPBodyPayload
-    data::Vector{TAMQPOctet}
-end
-
-immutable TAMQPContentBody
+# Generic frame, used to read any frame
+immutable TAMQPGenericFrame
     hdr::UInt8 # must be 3
     props::TAMQPFrameProperties
     payload::TAMQPBodyPayload
     fend::UInt8 # must be FrameEnd
 end
 
-immutable TAMQPContent
-    hdr::UInt8  # must be 2
+# Type = 1, "METHOD": method frame
+immutable TAMQPMethodFrame
+    props::TAMQPFrameProperties
+    payload::TAMQPMethodPayload
+
+    function TAMQPMethodFrame(f::TAMQPGenericFrame)
+        @logmsg("generic => method frame")
+        @assert f.hdr == 1
+        new(f.props, TAMQPMethodPayload(f.payload))
+    end
+end
+
+# Type = 2, "HEADER": content header frame.
+immutable TAMQPContentHeaderFrame
     props::TAMQPFrameProperties
     hdrpayload::TAMQPHeaderPayload
-    fend::UInt8 # must be FrameEnd
-    body::Vector{TAMQPContentBody}
+
+    function TAMQPContentHeaderFrame(f::TAMQPGenericFrame)
+        @assert f.hdr == 2
+        new(f.props, TAMQPHeaderPayload(f.payload))
+    end
+end
+
+# Type = 3, "BODY": content body frame.
+immutable TAMQPContentBodyFrame
+    props::TAMQPFrameProperties
+    payload::TAMQPBodyPayload
+
+    function TAMQPContentBodyFrame(f::TAMQPGenericFrame)
+        @assert f.hdr == 3
+        new(f.props, f.payload)
+    end
+end
+
+# Type = 4, "HEARTBEAT": heartbeat frame.
+immutable TAMQPHeartBeatFrame
+    function TAMQPHeartBeatFrame(f::TAMQPGenericFrame)
+        @assert f.hdr == 8
+        new()
+    end
+end
+
+immutable TAMQPContent
+    hdr::TAMQPContentHeaderFrame
+    body::Vector{TAMQPContentBodyFrame}
 end
 
 immutable TAMQPMethod
     frame::TAMQPMethodFrame
     content::Nullable{TAMQPContent}
+end
+
+# Exceptions
+type AMQPProtocolException <: Exception
+    msg::String
+end
+
+# Spec code gen types
+immutable MethodSpec
+    id::Int
+    name::Symbol
+    respname::Symbol
+    args::Vector{Pair{Symbol,DataType}}
+end
+
+immutable ClassSpec
+    id::Int
+    name::Symbol 
+    method_map::Dict{Int,MethodSpec}
+end
+
+# Utility Methods for Types
+method(classid::TAMQPClassId, methodid::TAMQPMethodId) = CLASS_MAP[classid].method_map[methodid]
+methodargs(classid::TAMQPClassId, methodid::TAMQPMethodId) = method(classid, methodid).args
+function displayname(classid::TAMQPClassId, methodid::TAMQPMethodId)
+    c = CLASS_MAP[classid]
+    m = c.method_map[methodid]
+    "$(c.name).$(m.name)"
 end
