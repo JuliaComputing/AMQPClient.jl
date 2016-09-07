@@ -330,7 +330,18 @@ const CLASS_MAP = Dict{TAMQPClassId,ClassSpec}(
     )) # class Confirm
 ) # CLASS_MAP")
 
+function make_classmethod_map()
+    cmmap = Dict{Tuple{Symbol,Symbol},MethodSpec}()
+    for v in values(CLASS_MAP)
+        for m in values(v.method_map)
+            cmmap[(v.name,m.name)] = m
+        end
+    end
+    cmmap
+end
+
 const CLASSNAME_MAP = Dict{Symbol,ClassSpec}(v.name => v for v in values(CLASS_MAP))
+const CLASSMETHODNAME_MAP = make_classmethod_map()
 # end Classes
 
 # end generated code

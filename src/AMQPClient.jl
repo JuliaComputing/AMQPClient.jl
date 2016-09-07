@@ -1,7 +1,8 @@
 module AMQPClient
 
 using Compat
-import Base: read, read!, close, convert, show
+using Base.I18n
+import Base: write, read, read!, close, convert, show
 
 # enable logging only during debugging
 using Logging
@@ -15,8 +16,16 @@ end
 #macro logmsg(s)
 #end
 
+# Client property info that gets sent to the server on connection startup
+const CLIENT_IDENTIFICATION = Dict{String,Any}(
+    "product" => "Julia AMQPClient",
+    "product_version" => string(VERSION),
+    "capabilities" => Dict{String,Any}()
+)
+
 include("types.jl")
 include("spec.jl")
+include("auth.jl")
 include("protocol.jl")
 include("convert.jl")
 include("show.jl")

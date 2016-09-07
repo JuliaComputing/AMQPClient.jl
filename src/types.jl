@@ -32,7 +32,7 @@ end
 
 immutable TAMQPShortStr
     len::TAMQPOctet
-    data::Vector{UInt8}
+    data::Vector{Int8}
 end
 
 immutable TAMQPLongStr
@@ -46,6 +46,7 @@ immutable TAMQPFieldValue{T}
     typ::Char  # as in FieldValueIndicatorMap
     fld::T
 end
+
 function TAMQPFieldValue(typ::Char, fld)
     T = FieldValueIndicatorMap[typ]
     TAMQPFieldValue{T}(typ, fld)
@@ -66,7 +67,7 @@ immutable TAMQPFieldTable
     data::Vector{TAMQPFieldValuePair}
 end
 
-typealias TAMQPField Union{TAMQPBit, TAMQPOctet, TAMQPShortUInt, TAMQPLongUInt, TAMQPLongLongUInt, TAMQPShortStr, TAMQPLongStr, TAMQPTimeStamp, TAMQPFieldTable}
+typealias TAMQPField Union{TAMQPBit, TAMQPOctet, TAMQPShortInt, TAMQPShortUInt, TAMQPLongInt, TAMQPLongUInt, TAMQPLongLongInt, TAMQPLongLongUInt, TAMQPShortStr, TAMQPLongStr, TAMQPTimeStamp, TAMQPFieldTable}
 
 const FieldValueIndicatorMap = Dict{Char,Type}(
     't' => TAMQPBool,
@@ -81,13 +82,16 @@ const FieldValueIndicatorMap = Dict{Char,Type}(
     'f' => TAMQPFloat,
     'd' => TAMQPDouble,
     'D' => TAMQPDecimalValue,
-    's' => TAMQPShortStr,
+    's' => TAMQPShortUInt,
     'S' => TAMQPLongStr,
+    'x' => TAMQPLongStr,
     'A' => TAMQPFieldArray,
     'T' => TAMQPTimeStamp,
     'F' => TAMQPFieldTable,
     'V' => Void
 )
+
+const FieldIndicatorMap = Dict{Type,Char}(v=>n for (n,v) in FieldValueIndicatorMap)
 
 typealias TAMQPContentClass     TAMQPOctet
 typealias TAMQPChannel          TAMQPShortUInt
@@ -125,11 +129,22 @@ immutable TAMQPMethodPayload
         @logmsg("reading method payload class:$class, method:$method, nargs:$(length(args))")
         for idx in 1:length(fields)
             fld = args[idx]
+            @logmsg("reading field $(fld.first) of type $(fld.second)")
             v = read(io, fld.second)
             issubtype(fld.second, Integer) && (v = ntoh(v))
             fields[idx] = Pair{Symbol,TAMQPField}(fld.first, v)
         end
         new(class, method, fields)
+    end
+    function TAMQPMethodPayload(class_name::Symbol, method_name::Symbol, fldvals)
+        class = CLASSNAME_MAP[class_name]
+        method = CLASSMETHODNAME_MAP[(class_name,method_name)]
+        fields = Pair{Symbol,TAMQPField}[]
+        for idx in 1:length(method.args)
+            (argname,argtype) = method.args[idx]
+            push!(fields, Pair{Symbol,TAMQPField}(argname, convert(argtype, fldvals[idx])))
+        end
+        new(class.id, method.id, fields)
     end
 end
 
@@ -153,12 +168,26 @@ end
 immutable TAMQPMethodFrame
     props::TAMQPFrameProperties
     payload::TAMQPMethodPayload
+end
 
-    function TAMQPMethodFrame(f::TAMQPGenericFrame)
-        @logmsg("generic => method frame")
-        @assert f.hdr == 1
-        new(f.props, TAMQPMethodPayload(f.payload))
+function TAMQPMethodFrame(f::TAMQPGenericFrame)
+    @logmsg("Frame Conversion: generic => method")
+    @assert f.hdr == 1
+    TAMQPMethodFrame(f.props, TAMQPMethodPayload(f.payload))
+end
+
+function TAMQPGenericFrame(f::TAMQPMethodFrame)
+    @logmsg("Frame Conversion method => generic")
+    iob = IOBuffer()
+    methpayload = f.payload
+    write(iob, hton(methpayload.class))
+    write(iob, hton(methpayload.method))
+    for (n,v) in methpayload.fields
+        issubtype(typeof(v), Integer) && (v = hton(v))
+        write(iob, v)
     end
+    bodypayload = TAMQPBodyPayload(takebuf_array(iob))
+    TAMQPGenericFrame(FrameMethod, TAMQPFrameProperties(f.props.channel, length(bodypayload.data)), bodypayload, FrameEnd)
 end
 
 # Type = 2, "HEADER": content header frame.
