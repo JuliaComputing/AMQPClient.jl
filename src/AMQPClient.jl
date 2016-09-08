@@ -2,7 +2,7 @@ module AMQPClient
 
 using Compat
 using Base.I18n
-import Base: write, read, read!, close, convert, show
+import Base: write, read, read!, close, convert, show, isopen
 
 # enable logging only during debugging
 using Logging
@@ -30,7 +30,7 @@ include("protocol.jl")
 include("convert.jl")
 include("show.jl")
 
-export Connection
+export channel
 export read, read!, close, convert, show
 
 end # module

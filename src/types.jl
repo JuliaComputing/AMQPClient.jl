@@ -235,6 +235,10 @@ type AMQPProtocolException <: Exception
     msg::String
 end
 
+type AMQPClientException <: Exception
+    msg::String
+end
+
 # Spec code gen types
 immutable MethodSpec
     id::Int
