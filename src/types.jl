@@ -158,7 +158,7 @@ end
 
 # Generic frame, used to read any frame
 immutable TAMQPGenericFrame
-    hdr::UInt8 # must be 3
+    hdr::UInt8
     props::TAMQPFrameProperties
     payload::TAMQPBodyPayload
     fend::UInt8 # must be FrameEnd
@@ -172,7 +172,7 @@ end
 
 function TAMQPMethodFrame(f::TAMQPGenericFrame)
     @logmsg("Frame Conversion: generic => method")
-    @assert f.hdr == 1
+    @assert f.hdr == FrameMethod
     TAMQPMethodFrame(f.props, TAMQPMethodPayload(f.payload))
 end
 
@@ -196,7 +196,7 @@ immutable TAMQPContentHeaderFrame
     hdrpayload::TAMQPHeaderPayload
 
     function TAMQPContentHeaderFrame(f::TAMQPGenericFrame)
-        @assert f.hdr == 2
+        @assert f.hdr == FrameHeader
         new(f.props, TAMQPHeaderPayload(f.payload))
     end
 end
@@ -207,17 +207,23 @@ immutable TAMQPContentBodyFrame
     payload::TAMQPBodyPayload
 
     function TAMQPContentBodyFrame(f::TAMQPGenericFrame)
-        @assert f.hdr == 3
+        @assert f.hdr == FrameBody
         new(f.props, f.payload)
     end
 end
 
 # Type = 4, "HEARTBEAT": heartbeat frame.
 immutable TAMQPHeartBeatFrame
-    function TAMQPHeartBeatFrame(f::TAMQPGenericFrame)
-        @assert f.hdr == 8
-        new()
-    end
+end
+
+function TAMQPHeartBeatFrame(f::TAMQPGenericFrame)
+    @assert f.hdr == FrameHeartbeat
+    TAMQPHeartBeatFrame()
+end
+
+function TAMQPGenericFrame(f::TAMQPHeartBeatFrame)
+    @logmsg("Frame Conversion heartbeat => generic")
+    TAMQPGenericFrame(FrameHeartbeat, TAMQPFrameProperties(DEFAULT_CHANNEL, 0), TAMQPBodyPayload(TAMQPOctet[]), FrameEnd)
 end
 
 immutable TAMQPContent

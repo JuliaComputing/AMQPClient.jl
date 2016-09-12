@@ -117,8 +117,9 @@ end
 function method_key(classname::Symbol, methodname::Symbol)
     class = CLASSNAME_MAP[classname]
     method = CLASSMETHODNAME_MAP[classname,methodname]
-    (class.id, method.id)
+    (FrameMethod, class.id, method.id)
 end
+frame_key(frame_type) = (UInt8(frame_type),)
 
 # ----------------------------------------
 # IO for types end
@@ -141,6 +142,7 @@ const CONN_MAX_QUEUED = typemax(Int)
 abstract AbstractChannel
 
 type Connection
+    virtualhost::String
     host::String
     port::Int
     sock::Nullable{TCPSocket}
@@ -159,11 +161,15 @@ type Connection
     receiver::Nullable{Task}
     heartbeater::Nullable{Task}
 
-    function Connection(host::String="localhost", port::Int=AMQP_DEFAULT_PORT)
-        new(host, port, nothing,
+    heartbeat_time_server::Float64
+    heartbeat_time_client::Float64
+
+    function Connection(virtualhost::String="/", host::String="localhost", port::Int=AMQP_DEFAULT_PORT)
+        new(virtualhost, host, port, nothing,
             Dict{Symbol,Any}(), Dict{String,Any}(), 0, 0, 0,
             CONN_STATE_CLOSED, Channel{TAMQPGenericFrame}(CONN_MAX_QUEUED), Dict{TAMQPChannel, AbstractChannel}(),
-            nothing, nothing, nothing)
+            nothing, nothing, nothing,
+            0.0, 0.0)
     end
 end
 
@@ -174,11 +180,11 @@ type MessageChannel <: AbstractChannel
 
     recvq::Channel{TAMQPGenericFrame}
     receiver::Nullable{Task}
-    callbacks::Dict{Tuple{TAMQPClassId,TAMQPMethodId},Tuple{Function,Any}}
+    callbacks::Dict{Tuple,Tuple{Function,Any}}
 
     function MessageChannel(id, conn)
         new(id, conn, CONN_STATE_CLOSED,
-            Channel{TAMQPGenericFrame}(CONN_MAX_QUEUED), nothing, Dict{Tuple{TAMQPClassId,TAMQPMethodId},Tuple{Function,Any}}())
+            Channel{TAMQPGenericFrame}(CONN_MAX_QUEUED), nothing, Dict{Tuple,Tuple{Function,Any}}())
     end
 end
 
@@ -233,15 +239,23 @@ function connection_processor(c, name, fn)
 end
 
 function connection_sender(c::Connection)
-    @logmsg("==> sending on conn")
+    @logmsg("==> sending on conn $(c.virtualhost)")
     write(sock(c), take!(c.sendq))
+
+    # update heartbeat time for client
+    c.heartbeat_time_client = time()
+
     nothing
 end
 
 function connection_receiver(c::Connection)
     f = read(sock(c), TAMQPGenericFrame)
+
+    # update heartbeat time for server
+    c.heartbeat_time_server = time()
+
     channelid = f.props.channel
-    @logmsg("<== read message for chan $channelid")
+    @logmsg("<== read message on conn $(c.virtualhost) for chan $channelid")
     if !(channelid in keys(c.channels))
         @logmsg("Discarding message for unknown channel $channelid")
     end
@@ -250,18 +264,40 @@ function connection_receiver(c::Connection)
     nothing
 end
 
-function on_unexpected_message(m::TAMQPMethodFrame)
-    @logmsg("Unexpected message: class:$(m.payload.class), method:$(m.payload.method)")
+function connection_heartbeater(c::Connection)
+    sleep(c.heartbeat)
+
+    isopen(c) || throw(AMQPClientException("Connection closed"))
+
+    now = time()
+    if (now - c.heartbeat_time_client) > c.heartbeat
+        send_connection_heartbeat(c)
+    end
+
+    if (now - c.heartbeat_time_server) > (2 * c.heartbeat)
+        @logmsg("server heartbeat missed for $(now - c.heartbeat_time_server) seconds")
+        close(c, false, false)
+    end
     nothing
 end
 
 function channel_receiver(c::MessageChannel)
     f = take!(c.recvq)
-    m = TAMQPMethodFrame(f)
+    if f.hdr == FrameMethod
+        m = TAMQPMethodFrame(f)
+        @logmsg("<== channel: $(f.props.channel), class:$(m.payload.class), method:$(m.payload.method)")
+        cbkey = (f.hdr, m.payload.class, m.payload.method)
+    elseif f.hdr == FrameHeartbeat
+        m = TAMQPHeartBeatFrame(f)
+        @logmsg("<== channel: $(f.props.channel), heartbeat")
+        cbkey = (f.hdr,)
+    else
+        m = f
+        @logmsg("<== channel: $(f.props.channel), unhandled frame type $(f.hdr)")
+        cbkey = (f.hdr,)
+    end
+    (cb,ctx) = get(c.callbacks, cbkey, (on_unexpected_message, nothing))
     @assert f.props.channel == c.id
-    @logmsg("channel: $(f.props.channel), class:$(m.payload.class), method:$(m.payload.method)")
-    cbkey = (m.payload.class, m.payload.method)
-    (cb,ctx) = get(c.callbacks, cbkey, on_unexpected_message)
     cb(c, m, ctx)
     nothing
 end
@@ -269,6 +305,15 @@ end
 clear_handlers(c::MessageChannel) = (empty!(c.callbacks); nothing)
 function handle(c::MessageChannel, classname::Symbol, methodname::Symbol, cb=nothing, ctx=nothing)
     cbkey = method_key(classname, methodname)
+    if cb == nothing
+        delete!(c.callbacks, cbkey)
+    else
+        c.callbacks[cbkey] = (cb, ctx)
+    end
+    nothing
+end
+function handle(c::MessageChannel, frame_type::Integer, cb=nothing, ctx=nothing)
+    cbkey = frame_key(frame_type)
     if cb == nothing
         delete!(c.callbacks, cbkey)
     else
@@ -313,9 +358,9 @@ function channel(c::Connection, id::Integer, create::Bool)
     chan
 end
 
-function channel(;host="localhost", port=AMQP_DEFAULT_PORT, auth_params=DEFAULT_AUTH_PARAMS, channelmax=0, framemax=0, heartbeat=0, connect_timeout=5)
-    @logmsg("connecting to $(host):$(port)")
-    conn = Connection(host, port)
+function channel(;virtualhost="/", host="localhost", port=AMQP_DEFAULT_PORT, auth_params=DEFAULT_AUTH_PARAMS, channelmax=0, framemax=0, heartbeat=0, connect_timeout=5)
+    @logmsg("connecting to $(host):$(port)$(virtualhost)")
+    conn = Connection(virtualhost, host, port)
     chan = channel(conn, DEFAULT_CHANNEL, true)
 
     # setup handler for Connection.Start
@@ -355,11 +400,8 @@ function close(chan::MessageChannel, handshake::Bool=false, by_peer::Bool=false,
     if chan.id == DEFAULT_CHANNEL
         # default channel represents the connection
         close(conn, handshake, by_peer, reply_code, reply_text, class_id, method_id)
-        return
-    end
-
-    # send handshake if needed and when called the first time
-    if chan.state != CONN_STATE_CLOSING
+    elseif chan.state != CONN_STATE_CLOSING
+        # send handshake if needed and when called the first time
         chan.state = CONN_STATE_CLOSING
         if handshake && !by_peer
             send_channel_close(chan, reply_code, reply_text, class_id, method_id)
@@ -368,11 +410,11 @@ function close(chan::MessageChannel, handshake::Bool=false, by_peer::Bool=false,
 
     # release resources when closed by peer or when closing abruptly
     if !handshake || by_peer
-        close(c.recvq)
-        c.receiver = nothing
-        c.callbacks = Dict{Tuple{TAMQPClassId,TAMQPMethodId},Function}()
-        delete!(c.conn.channels, c.id)
-        c.state = CONN_STATE_CLOSED
+        close(chan.recvq)
+        chan.receiver = nothing
+        chan.callbacks = Dict{Tuple,Tuple{Function,Any}}()
+        delete!(chan.conn.channels, chan.id)
+        chan.state = CONN_STATE_CLOSED
     end
     nothing
 end
@@ -426,52 +468,6 @@ end
 # Close channel / connection end
 # ----------------------------------------
 
-
-#function recv_method_frame(c::MessageChannel)
-#    f = read(sock(c), TAMQPGenericFrame)
-#    #@assert f.props.channel == c.id
-#    m = TAMQPMethodFrame(f)
-#    @logmsg("channel: $(f.props.channel), class:$(m.payload.class), method:$(m.payload.method)")
-#    m
-#end
-#
-#function send_method_frame(c::MessageChannel, m::TAMQPMethodFrame)
-#    f.props.channel = c.id
-#    write(sock(c), TAMQPGenericFrame(m))
-#end
-
-function negotiate(c::Connection, auth_params::Dict{String,Any}=Dict{String,Any}();
-                   channelmax=0, framemax=0, heartbeat=0)
-    @logmsg("connecting to $(c.host):$(c.port)")
-    c.sock = Nullable(connect(c.host, c.port))
-    write(sock(c), ProtocolHeader)
-    #try
-        m = recv_connection_start(c)
-        send_connection_start_ok(c, auth_params)
-        m = recv_connection_tune(c)
-        send_connection_tune_ok(c, channelmax, framemax, heartbeat)
-        m = recv_method_frame(c)
-        m
-    #catch ex
-    #    println(stacktrace())
-    #    @logmsg("Exception $ex")
-    #    # check if server suggests a different protocol
-    #    buff = Array(UInt8, 3)
-    #    read!(sock(c), buff)
-    #    if buff == LiteralAMQP[2:end]
-    #        read(sock(c), UInt8)
-    #        sver = read!(sock(c), buff)
-    #        sproto = VersionNumber(sver...)
-    #        cproto = VersionNumber(ProtocolVersion...)
-    #        msg = "Protocol mismatch: client:$cproto, server:$sproto"
-    #    else
-    #        msg = "Unknown server protocol"
-    #    end
-    #    close(c)
-    #    throw(AMQPProtocolException(msg))
-    #end
-end
-
 # ----------------------------------------
 # Connection and Channel end
 # ----------------------------------------
@@ -479,6 +475,16 @@ end
 # ----------------------------------------
 # send and recv for methods begin
 # ----------------------------------------
+
+function on_unexpected_message(c::MessageChannel, m::TAMQPMethodFrame, ctx)
+    @logmsg("Unexpected message on channel $(c.id): class:$(m.payload.class), method:$(m.payload.method)")
+    nothing
+end
+
+function on_unexpected_message(c::MessageChannel, f, ctx)
+    @logmsg("Unexpected message on channel $(c.id): frame type: $(f.hdr)")
+    nothing
+end
 
 function _send_close_ok(context_class::Symbol, chan::MessageChannel)
     props = TAMQPFrameProperties(0,0)
@@ -500,23 +506,27 @@ function _send_close(context_class::Symbol, chan::MessageChannel, reply_code=Rep
         context_class = :Connection
     end
 
-    conn = chan.conn
+    _send_close(context_class, chan.conn, reply_code, reply_text, class_id, method_id)
+end
 
+function _send_close(context_class::Symbol, conn::Connection, reply_code=ReplySuccess, reply_text="", class_id=0, method_id=0)
     props = TAMQPFrameProperties(0,0)
     payload = TAMQPMethodPayload(context_class, :Close, (TAMQPReplyCode(reply_code), TAMQPReplyText(reply_text), TAMQPClassId(class_id), TAMQPMethodId(method_id)))
     # CloseOk is always handled on channels/connections
     @logmsg("sending $context_class Close")
-    send(chan, TAMQPMethodFrame(props, payload))
+    send(conn, TAMQPMethodFrame(props, payload))
     nothing
 end
 
 send_connection_close_ok(chan::MessageChannel) = _send_close_ok(:Connection, chan)
 on_connection_close_ok(chan::MessageChannel, m::TAMQPMethodFrame, ctx) = _on_close_ok(:Connection, chan, m, ctx)
-send_connection_close(chan::MessageChannel, reply_code=ReplySuccess, reply_text="", class_id=0, method_id=0) = _send_close(:Connection, chan, reply_code, reply_text, class_id, method_ic)
+
+send_connection_close(chan::MessageChannel, reply_code=ReplySuccess, reply_text="", class_id=0, method_id=0) = _send_close(:Connection, chan, reply_code, reply_text, class_id, method_id)
+send_connection_close(conn::Connection, reply_code=ReplySuccess, reply_text="", class_id=0, method_id=0) = _send_close(:Connection, conn, reply_code, reply_text, class_id, method_id)
 
 send_channel_close_ok(chan::MessageChannel) = _send_close_ok(:Channel, chan)
 on_channel_close_ok(chan::MessageChannel, m::TAMQPMethodFrame, ctx) = _on_close_ok(:Channel, chan, m, ctx)
-send_channel_close(chan::MessageChannel, reply_code=ReplySuccess, reply_text="", class_id=0, method_id=0) = _send_close(:Channel, chan, reply_code, reply_text, class_id, method_ic)
+send_channel_close(chan::MessageChannel, reply_code=ReplySuccess, reply_text="", class_id=0, method_id=0) = _send_close(:Channel, chan, reply_code, reply_text, class_id, method_id)
 
 function on_connection_start(chan::MessageChannel, m::TAMQPMethodFrame, ctx)
     @assert is_method(m, :Connection, :Start)
@@ -591,7 +601,11 @@ function on_connection_tune(chan::MessageChannel, m::TAMQPMethodFrame, ctx)
     conn.channelmax = m.payload.fields[1].second
     conn.framemax = m.payload.fields[2].second
     conn.heartbeat = m.payload.fields[3].second
+    handle(chan, FrameHeartbeat, on_connection_heartbeat)
     send_connection_tune_ok(chan, ctx[:channelmax], ctx[:framemax], ctx[:heartbeat])
+    handle(chan, :Connection, :TuneOk)
+    handle(chan, :Connection, :OpenOk, on_connection_open_ok, ctx)
+    send_connection_open(chan)
     nothing
 end
 
@@ -614,6 +628,39 @@ function send_connection_tune_ok(chan::MessageChannel, channelmax=0, framemax=0,
     payload = TAMQPMethodPayload(:Connection, :TuneOk, (conn.channelmax, conn.framemax, conn.heartbeat))
     @logmsg("sending Connection TuneOk")
     send(chan, TAMQPMethodFrame(props, payload))
+
+    # start heartbeat timer
+    conn.heartbeater = @async connection_processor(conn, "HeartBeater", connection_heartbeater)
+    nothing
+end
+
+function send_connection_open(chan::MessageChannel)
+    props = TAMQPFrameProperties(0,0)
+    payload = TAMQPMethodPayload(:Connection, :Open, (chan.conn.virtualhost, "", false))
+    @logmsg("sending Connection Open")
+    send(chan, TAMQPMethodFrame(props, payload))
+    nothing
+end
+
+function on_connection_open_ok(chan::MessageChannel, m::TAMQPMethodFrame, ctx)
+    @assert is_method(m, :Connection, :OpenOk)
+    @assert chan.id == DEFAULT_CHANNEL
+    conn = chan.conn
+
+    conn.state = CONN_STATE_OPEN
+    chan.state = CONN_STATE_OPEN
+
+    handle(chan, :Connection, :CloseOk, on_connection_close_ok, ctx)
+
+    nothing
+end
+
+function on_connection_heartbeat(chan::MessageChannel, h::TAMQPHeartBeatFrame, ctx)
+    nothing
+end
+
+function send_connection_heartbeat(conn::Connection)
+    send(conn, TAMQPHeartBeatFrame())
     nothing
 end
 
