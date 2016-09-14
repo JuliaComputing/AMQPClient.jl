@@ -259,6 +259,13 @@ immutable ClassSpec
     method_map::Dict{Int,MethodSpec}
 end
 
+immutable CloseReason
+    code::Int16
+    msg::TAMQPShortStr
+    classid::TAMQPClassId
+    methodid::TAMQPMethodId
+end
+
 # Utility Methods for Types
 method(classid::TAMQPClassId, methodid::TAMQPMethodId) = CLASS_MAP[classid].method_map[methodid]
 methodargs(classid::TAMQPClassId, methodid::TAMQPMethodId) = method(classid, methodid).args

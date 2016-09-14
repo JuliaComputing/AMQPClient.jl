@@ -131,6 +131,7 @@ frame_key(frame_type) = (UInt8(frame_type),)
 
 const UNUSED_CHANNEL = -1
 const DEFAULT_CHANNEL = 0
+const DEFAULT_CHANNELMAX = 256
 const DEFAULT_AUTH_PARAMS = Dict{String,Any}("MECHANISM"=>"AMQPLAIN", "LOGIN"=>"guest", "PASSWORD"=>"guest")
 
 const CONN_STATE_CLOSED = 0
@@ -177,14 +178,18 @@ type MessageChannel <: AbstractChannel
     id::TAMQPChannel
     conn::Connection
     state::UInt8
+    flow::Bool
 
     recvq::Channel{TAMQPGenericFrame}
     receiver::Nullable{Task}
     callbacks::Dict{Tuple,Tuple{Function,Any}}
 
+    closereason::Nullable{CloseReason}
+
     function MessageChannel(id, conn)
-        new(id, conn, CONN_STATE_CLOSED,
-            Channel{TAMQPGenericFrame}(CONN_MAX_QUEUED), nothing, Dict{Tuple,Tuple{Function,Any}}())
+        new(id, conn, CONN_STATE_CLOSED, true,
+            Channel{TAMQPGenericFrame}(CONN_MAX_QUEUED), nothing, Dict{Tuple,Tuple{Function,Any}}(),
+            nothing)
     end
 end
 
@@ -332,9 +337,10 @@ end
 
 function find_unused_channel(c::Connection)
     k = keys(c.channels)
+    maxid = c.channelmax
     for id in 0:maxid
         if !(id in k)
-            return k
+            return id
         end
     end
     throw(AMQPClientException("No free channel available (max: $maxid)"))
@@ -342,7 +348,7 @@ end
 channel(c::MessageChannel, id::Integer) = channel(c.conn, id)
 channel(c::Connection, id::Integer) = c.channels[id]
 channel(c::MessageChannel, id::Integer, create::Bool) = channel(c.conn, id, create)
-function channel(c::Connection, id::Integer, create::Bool)
+function channel(c::Connection, id::Integer, create::Bool; connect_timeout=5)
     if create
         if id == UNUSED_CHANNEL
             id = find_unused_channel(c)
@@ -352,13 +358,24 @@ function channel(c::Connection, id::Integer, create::Bool)
         chan = MessageChannel(id, c)
         chan.state = CONN_STATE_OPENING
         c.channels[chan.id] = chan
+
+        if id != DEFAULT_CHANNEL
+            # open the channel
+            chan.receiver = @async connection_processor(chan, "ChannelReceiver($(chan.id))", channel_receiver)
+            handle(chan, :Channel, :OpenOk, on_channel_open_ok)
+            send_channel_open(chan)
+
+            if !wait_for_state(chan, CONN_STATE_OPEN; timeout=connect_timeout)
+                throw(AMQPClientException("Channel handshake failed"))
+            end
+        end
     else
         chan = channel(c, id)
     end
     chan
 end
 
-function channel(;virtualhost="/", host="localhost", port=AMQP_DEFAULT_PORT, auth_params=DEFAULT_AUTH_PARAMS, channelmax=0, framemax=0, heartbeat=0, connect_timeout=5)
+function channel(;virtualhost="/", host="localhost", port=AMQP_DEFAULT_PORT, auth_params=DEFAULT_AUTH_PARAMS, channelmax=DEFAULT_CHANNELMAX, framemax=0, heartbeat=0, connect_timeout=5)
     @logmsg("connecting to $(host):$(port)$(virtualhost)")
     conn = Connection(virtualhost, host, port)
     chan = channel(conn, DEFAULT_CHANNEL, true)
@@ -487,8 +504,8 @@ function on_unexpected_message(c::MessageChannel, f, ctx)
 end
 
 function _send_close_ok(context_class::Symbol, chan::MessageChannel)
-    props = TAMQPFrameProperties(0,0)
-    payload = TAMQPMethodPayload(context_class_id, :CloseOk, ())
+    props = TAMQPFrameProperties(chan.id,0)
+    payload = TAMQPMethodPayload(context_class, :CloseOk, ())
     @logmsg("sending $context_class CloseOk")
     send(chan, TAMQPMethodFrame(props, payload))
     nothing
@@ -501,16 +518,17 @@ function _on_close_ok(context_class::Symbol, chan::MessageChannel, m::TAMQPMetho
 end
 
 function _send_close(context_class::Symbol, chan::MessageChannel, reply_code=ReplySuccess, reply_text="", class_id=0, method_id=0)
+    chan.closereason = CloseReason(TAMQPReplyCode(reply_code), TAMQPReplyText(reply_text), TAMQPClassId(class_id), TAMQPMethodId(method_id))
     if context_class === :Channel && chan.id == DEFAULT_CHANNEL
         @logmsg("closing channel 0 is equivalent to closing the connection!")
         context_class = :Connection
     end
 
-    _send_close(context_class, chan.conn, reply_code, reply_text, class_id, method_id)
+    _send_close(context_class, chan.conn, reply_code, reply_text, class_id, method_id, chan.id)
 end
 
-function _send_close(context_class::Symbol, conn::Connection, reply_code=ReplySuccess, reply_text="", class_id=0, method_id=0)
-    props = TAMQPFrameProperties(0,0)
+function _send_close(context_class::Symbol, conn::Connection, reply_code=ReplySuccess, reply_text="", class_id=0, method_id=0, chan_id=0)
+    props = TAMQPFrameProperties(chan_id,0)
     payload = TAMQPMethodPayload(context_class, :Close, (TAMQPReplyCode(reply_code), TAMQPReplyText(reply_text), TAMQPClassId(class_id), TAMQPMethodId(method_id)))
     # CloseOk is always handled on channels/connections
     @logmsg("sending $context_class Close")
@@ -520,6 +538,24 @@ end
 
 send_connection_close_ok(chan::MessageChannel) = _send_close_ok(:Connection, chan)
 on_connection_close_ok(chan::MessageChannel, m::TAMQPMethodFrame, ctx) = _on_close_ok(:Connection, chan, m, ctx)
+function on_connection_close(chan::MessageChannel, m::TAMQPMethodFrame, ctx)
+    @assert is_method(m, :Connection, :Close)
+    @assert chan.id == DEFAULT_CHANNEL
+    chan.closereason = CloseReason(m.payload.fields[1].second, m.payload.fields[2].second, m.payload.fields[3].second, m.payload.fields[4].second)
+    send_connection_close_ok(chan)
+    t1 = time()
+    while isready(chan.conn.sendq) && ((time() - t1) < 5)
+        yield() # wait 5 seconds (arbirtary) for the message to get sent
+    end
+    close(chan, false, true)
+end
+function on_channel_close(chan::MessageChannel, m::TAMQPMethodFrame, ctx)
+    @assert is_method(m, :Channel, :Close)
+    @assert chan.id != DEFAULT_CHANNEL
+    chan.closereason = CloseReason(m.payload.fields[1].second, m.payload.fields[2].second, m.payload.fields[3].second, m.payload.fields[4].second)
+    send_channel_close_ok(chan)
+    close(chan, false, true)
+end
 
 send_connection_close(chan::MessageChannel, reply_code=ReplySuccess, reply_text="", class_id=0, method_id=0) = _send_close(:Connection, chan, reply_code, reply_text, class_id, method_id)
 send_connection_close(conn::Connection, reply_code=ReplySuccess, reply_text="", class_id=0, method_id=0) = _send_close(:Connection, conn, reply_code, reply_text, class_id, method_id)
@@ -586,7 +622,7 @@ function send_connection_start_ok(chan::MessageChannel, auth_params::Dict{String
     auth_resp = AUTH_PROVIDERS[mechanism](auth_params)
     @logmsg("auth_resp: $(auth_resp)")
 
-    props = TAMQPFrameProperties(0,0)
+    props = TAMQPFrameProperties(chan.id,0)
     payload = TAMQPMethodPayload(:Connection, :StartOk, (client_props, mechanism, auth_resp, client_locale))
     @logmsg("sending Connection StartOk")
     send(chan, TAMQPMethodFrame(props, payload))
@@ -623,7 +659,7 @@ function send_connection_tune_ok(chan::MessageChannel, channelmax=0, framemax=0,
         conn.heartbeat = max(conn.heartbeat, heartbeat)
     end
 
-    props = TAMQPFrameProperties(0,0)
+    props = TAMQPFrameProperties(chan.id,0)
     @logmsg("channelmax: $(conn.channelmax), framemax: $(conn.framemax), heartbeat: $(conn.heartbeat)")
     payload = TAMQPMethodPayload(:Connection, :TuneOk, (conn.channelmax, conn.framemax, conn.heartbeat))
     @logmsg("sending Connection TuneOk")
@@ -635,7 +671,7 @@ function send_connection_tune_ok(chan::MessageChannel, channelmax=0, framemax=0,
 end
 
 function send_connection_open(chan::MessageChannel)
-    props = TAMQPFrameProperties(0,0)
+    props = TAMQPFrameProperties(chan.id,0)
     payload = TAMQPMethodPayload(:Connection, :Open, (chan.conn.virtualhost, "", false))
     @logmsg("sending Connection Open")
     send(chan, TAMQPMethodFrame(props, payload))
@@ -650,6 +686,7 @@ function on_connection_open_ok(chan::MessageChannel, m::TAMQPMethodFrame, ctx)
     conn.state = CONN_STATE_OPEN
     chan.state = CONN_STATE_OPEN
 
+    handle(chan, :Connection, :Close, on_connection_close, ctx)
     handle(chan, :Connection, :CloseOk, on_connection_close_ok, ctx)
 
     nothing
@@ -661,6 +698,38 @@ end
 
 function send_connection_heartbeat(conn::Connection)
     send(conn, TAMQPHeartBeatFrame())
+    nothing
+end
+
+function send_channel_open(chan::MessageChannel)
+    props = TAMQPFrameProperties(chan.id,0)
+    payload = TAMQPMethodPayload(:Channel, :Open, ("",))
+    @logmsg("sending Channel Open")
+    send(chan, TAMQPMethodFrame(props, payload))
+    nothing
+end
+
+function on_channel_open_ok(chan::MessageChannel, m::TAMQPMethodFrame, ctx)
+    chan.state = CONN_STATE_OPEN
+    handle(chan, :Channel, :Flow, on_channel_flow, :Flow)
+    handle(chan, :Channel, :FlowOk, on_channel_flow, :FlowOk)
+    handle(chan, :Channel, :Close, on_channel_close)
+    handle(chan, :Channel, :CloseOk, on_channel_close_ok)
+    nothing
+end
+
+function send_channel_flow(chan::MessageChannel, flow::Bool)
+    props = TAMQPFrameProperties(chan.id,0)
+    payload = TAMQPMethodPayload(:Channel, :Flow, (flow,))
+    @logmsg("sending Channel Flow")
+    send(chan, TAMQPMethodFrame(props, payload))
+    nothing
+end
+
+function on_channel_flow(chan::MessageChannel, m::TAMQPMethodFrame, ctx)
+    @assert is_method(m, :Channel, ctx)
+    chan.flow = m.payload.fields[1].second
+    @logmsg("channel $(chan.id) flow is now $(chan.flow)")
     nothing
 end
 
