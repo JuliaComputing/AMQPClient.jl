@@ -9,7 +9,7 @@ const FrameEnd = 0xCE
 const HeartBeat = UInt8[8, 0, 0, FrameEnd]
 
 
-typealias TAMQPBit                  UInt8
+#typealias TAMQPBit                  UInt8
 typealias TAMQPBool                 UInt8 # 0 = FALSE, else TRUE
 typealias TAMQPScale                UInt8 # number of decimal digits
 typealias TAMQPOctet                UInt8
@@ -24,6 +24,18 @@ typealias TAMQPLongLongUInt         UInt64
 typealias TAMQPFloat                Float32
 typealias TAMQPDouble               Float64
 typealias TAMQPTimeStamp            TAMQPLongLongUInt
+
+immutable TAMQPBit
+    val::UInt8
+end
+
+function TAMQPBit(b::TAMQPBit, pos::Int)
+    TAMQPBit((b >> (pos-1)) & 0x1)
+end
+
+function TAMQPBit(b::TAMQPBit, setbit::TAMQPBit, pos::Int)
+    TAMQPBit(b.val & (setbit.val << (pos-1)))
+end
 
 immutable TAMQPDecimalValue
     scale::TAMQPScale
@@ -127,10 +139,20 @@ immutable TAMQPMethodPayload
         args = methodargs(class, method)
         fields = Array(Pair{Symbol,TAMQPField}, length(args))
         @logmsg("reading method payload class:$class, method:$method, nargs:$(length(args))")
+        bitpos = 0
+        bitval = TAMQPBit(0)
         for idx in 1:length(fields)
             fld = args[idx]
             @logmsg("reading field $(fld.first) of type $(fld.second)")
-            v = read(io, fld.second)
+            if fld.second === TAMQPBit
+                bitpos += 1
+                (bitpos == 1) && (bitval = read(io, fld.second))
+                v = TAMQPBit(bitval, bitpos)
+                (bitpos == 8) && (bitpos == 0)
+            else
+                bitpos = 0
+                v = read(io, fld.second)
+            end
             issubtype(fld.second, Integer) && (v = ntoh(v))
             fields[idx] = Pair{Symbol,TAMQPField}(fld.first, v)
         end
@@ -182,9 +204,29 @@ function TAMQPGenericFrame(f::TAMQPMethodFrame)
     methpayload = f.payload
     write(iob, hton(methpayload.class))
     write(iob, hton(methpayload.method))
+    bitpos = 0
+    bitval = TAMQPBit(0)
     for (n,v) in methpayload.fields
-        issubtype(typeof(v), Integer) && (v = hton(v))
-        write(iob, v)
+        if isa(v, TAMQPBit)
+            bitpos += 1
+            bitval = TAMQPBit(bitval, v, bitpos)
+            if bitpos == 8
+                write(iob, bitval)
+                bitpos = 0
+                bitval = TAMQPBit(0)
+            end
+        else
+            if bitpos > 0
+                write(iob, bitval)
+                bitpos = 0
+                bitval = TAMQPBit(0)
+            end
+            issubtype(typeof(v), Integer) && (v = hton(v))
+            write(iob, v)
+        end
+    end
+    if bitpos > 0
+        write(iob, bitval)
     end
     bodypayload = TAMQPBodyPayload(takebuf_array(iob))
     TAMQPGenericFrame(FrameMethod, TAMQPFrameProperties(f.props.channel, length(bodypayload.data)), bodypayload, FrameEnd)

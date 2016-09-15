@@ -22,3 +22,7 @@ end
 
 convert(::Type{Any}, t::TAMQPFieldArray) = convert(Vector, t)
 convert{T}(::Type{Vector{T}}, t::TAMQPFieldArray) = convert(Vector{T}, t.data)
+
+convert(::Type{Bool}, b::TAMQPBit) = Bool(b.val & 0x1)
+convert(::Type{TAMQPBit}, b::Bool) = TAMQPBit(convert(UInt8, b))
+convert{T<:Integer}(::Type{TAMQPBit}, b::T) = convert(TAMQPBit, Bool(b))

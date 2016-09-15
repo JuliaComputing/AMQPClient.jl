@@ -1,6 +1,14 @@
 # ----------------------------------------
 # IO for types begin
 # ----------------------------------------
+function read(io::IO, ::Type{TAMQPBit})
+    TAMQPBit(read(io, UInt8))
+end
+
+function write(io::IO, b::TAMQPBit)
+    write(io, b.val)
+end
+
 function read(io::IO, ::Type{TAMQPFrameProperties})
     TAMQPFrameProperties(
         ntoh(read(io, fieldtype(TAMQPFrameProperties, :channel))),
@@ -375,7 +383,7 @@ function channel(c::Connection, id::Integer, create::Bool; connect_timeout=5)
     chan
 end
 
-function channel(;virtualhost="/", host="localhost", port=AMQP_DEFAULT_PORT, auth_params=DEFAULT_AUTH_PARAMS, channelmax=DEFAULT_CHANNELMAX, framemax=0, heartbeat=0, connect_timeout=5)
+function connection(;virtualhost="/", host="localhost", port=AMQP_DEFAULT_PORT, auth_params=DEFAULT_AUTH_PARAMS, channelmax=DEFAULT_CHANNELMAX, framemax=0, heartbeat=0, connect_timeout=5)
     @logmsg("connecting to $(host):$(port)$(virtualhost)")
     conn = Connection(virtualhost, host, port)
     chan = channel(conn, DEFAULT_CHANNEL, true)
@@ -490,6 +498,85 @@ end
 # ----------------------------------------
 
 # ----------------------------------------
+# Exchange begin
+# ----------------------------------------
+const EXCHANGE_TYPE_DIRECT = "direct"      # must be implemented by servers
+const EXCHANGE_TYPE_FANOUT = "fanout"      # must be implemented by servers
+const EXCHANGE_TYPE_TOPIC = "topic"        # optional, must test before typing to open
+const EXCHANGE_TYPE_HEADERS = "headers"    # optional, must test before typing to open
+
+# The server MUST, in each virtual host, pre­declare an exchange instance for each standard 
+# exchange type that it implements, where the name of the exchange instance, if defined, is "amq." 
+# followed by the exchange type name.
+# The server MUST pre­declare a direct exchange with no public name to act as the default 
+# exchange for content Publish methods and for default queue bindings.
+default_exchange_name(excg_type) = ("amq." * excg_type)
+default_exchange_name() = ""
+
+function _wait_resp{T}(sendmethod, chan::MessageChannel, default_result::T, 
+        nowait::Bool=true, resp_handler=nothing, resp_class=nothing, resp_meth=nothing,
+        timeout_result::T=default_result, timeout::Int=10)
+    result = default_result
+    if !nowait
+        reply = Channel{T}(1)
+        # timer to time the request out, in case of an error
+        t = Timer((t)->try put!(reply, timeout_result) end, timeout)
+        # register a callback for declare ok
+        handle(chan, resp_class, resp_meth, resp_handler, reply)
+    end
+
+    sendmethod()
+
+    if !nowait
+        # wait for response
+        result = take!(reply)
+        close(reply)
+    end
+    result
+end
+
+function exchange_declare(chan::MessageChannel, name::String, typ::String;
+        passive::Bool=false, durable::Bool=false, auto_delete::Bool=false,
+        nowait::Bool=false, timeout::Int=10,
+        arguments::Dict{String,Any}=Dict{String,Any}())
+    (isempty(name) || startswith(name, "amq.")) && !passive && throw(AMQPClientException("Exchange name '$name' is reserved. Use a different name."))
+    if auto_delete
+        @logmsg("Warning: auto_delete exchange types are deprecated")
+    end
+
+    _wait_resp(chan, true, nowait, on_exchange_declare_ok, :Exchange, :DeclareOk, false, timeout) do
+        send_exchange_declare(chan, name, typ, passive, durable, auto_delete, nowait, arguments)
+    end
+end
+
+function exchange_delete(chan::MessageChannel, name::String; if_unused::Bool=false, nowait::Bool=false, timeout::Int=10)
+    (isempty(name) || startswith(name, "amq.")) && throw(AMQPClientException("Exchange name '$name' is reserved. Use a different name."))
+    _wait_resp(chan, true, nowait, on_exchange_delete_ok, :Exchange, :DeleteOk, false, timeout) do
+        send_exchange_delete(chan, name, if_unused, nowait)
+    end
+end
+
+function exchange_bind(chan::MessageChannel, dest::String, src::String, routing_key::String;
+        nowait::Bool=false, timeout::Int=10,
+        arguments::Dict{String,Any}=Dict{String,Any}())
+    _wait_resp(chan, true, nowait, on_exchange_bind_ok, :Exchange, :BindOk, false, timeout) do
+        send_exchange_bind(chan, dest, src, routing_key, nowait, arguments)
+    end
+end
+
+function exchange_unbind(chan::MessageChannel, dest::String, src::String, routing_key::String;
+        nowait::Bool=false, timeout::Int=10,
+        arguments::Dict{String,Any}=Dict{String,Any}())
+    _wait_resp(chan, true, nowait, on_exchange_unbind_ok, :Exchange, :UnbindOk, false, timeout) do
+        send_exchange_unbind(chan, dest, src, routing_key, nowait, arguments)
+    end
+end
+
+# ----------------------------------------
+# Exchange end
+# ----------------------------------------
+
+# ----------------------------------------
 # send and recv for methods begin
 # ----------------------------------------
 
@@ -500,6 +587,15 @@ end
 
 function on_unexpected_message(c::MessageChannel, f, ctx)
     @logmsg("Unexpected message on channel $(c.id): frame type: $(f.hdr)")
+    nothing
+end
+
+function _on_ack(chan::MessageChannel, m::TAMQPMethodFrame, class::Symbol, method::Symbol, ctx)
+    @assert is_method(m, class, method)
+    if ctx !== nothing
+        put!(ctx, true)
+    end
+    handle(chan, class, method)
     nothing
 end
 
@@ -732,6 +828,39 @@ function on_channel_flow(chan::MessageChannel, m::TAMQPMethodFrame, ctx)
     @logmsg("channel $(chan.id) flow is now $(chan.flow)")
     nothing
 end
+
+function send_exchange_declare(chan::MessageChannel, name::String, typ::String,
+        passive::Bool=false, durable::Bool=false, auto_delete::Bool=false, nowait::Bool=false,
+        arguments::Dict{String,Any}=Dict{String,Any}())
+    props = TAMQPFrameProperties(chan.id,0)
+    payload = TAMQPMethodPayload(:Exchange, :Declare, (0, name, typ, passive, durable, auto_delete, false, nowait, arguments))
+    @logmsg("sending Exchange Declare")
+    send(chan, TAMQPMethodFrame(props, payload))
+    nothing
+end
+
+function send_exchange_delete(chan::MessageChannel, name::String, if_unused::Bool, nowait::Bool)
+    props = TAMQPFrameProperties(chan.id,0)
+    payload = TAMQPMethodPayload(:Exchange, :Delete, (0, name, if_unused, nowait))
+    @logmsg("sending Exchange Delete")
+    send(chan, TAMQPMethodFrame(props, payload))
+    nothing
+end
+
+function _send_exchange_bind_unbind(chan::MessageChannel, meth::Symbol, dest::String, src::String, routing_key::String, nowait::Bool, arguments::Dict{String,Any})
+    props = TAMQPFrameProperties(chan.id,0)
+    payload = TAMQPMethodPayload(:Exchange, meth, (0, dest, src, routing_key, nowait, arguments))
+    @logmsg("sending Exchange $meth")
+    send(chan, TAMQPMethodFrame(props, payload))
+    nothing
+end
+send_exchange_bind(chan::MessageChannel, dest::String, src::String, routing_key::String, nowait::Bool, arguments::Dict{String,Any}=Dict{String,Any}()) = _send_exchange_bind_unbind(chan, :Bind, dest, src, routing_key, nowait, arguments)
+send_exchange_unbind(chan::MessageChannel, dest::String, src::String, routing_key::String, nowait::Bool, arguments::Dict{String,Any}=Dict{String,Any}()) = _send_exchange_bind_unbind(chan, :Unbind, dest, src, routing_key, nowait, arguments)
+
+on_exchange_declare_ok(chan::MessageChannel, m::TAMQPMethodFrame, ctx) = _on_ack(chan, m, :Exchange, :DeclareOk, ctx)
+on_exchange_delete_ok(chan::MessageChannel, m::TAMQPMethodFrame, ctx) = _on_ack(chan, m, :Exchange, :DeleteOk, ctx)
+on_exchange_bind_ok(chan::MessageChannel, m::TAMQPMethodFrame, ctx) = _on_ack(chan, m, :Exchange, :BindOk, ctx)
+on_exchange_unbind_ok(chan::MessageChannel, m::TAMQPMethodFrame, ctx) = _on_ack(chan, m, :Exchange, :UnbindOk, ctx)
 
 # ----------------------------------------
 # send and recv for methods end

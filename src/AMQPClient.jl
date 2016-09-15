@@ -30,7 +30,9 @@ include("protocol.jl")
 include("convert.jl")
 include("show.jl")
 
-export channel
+export connection, channel
+export exchange_declare, exchange_delete, exchange_bind, exchange_unbind
+export EXCHANGE_TYPE_DIRECT, EXCHANGE_TYPE_FANOUT, EXCHANGE_TYPE_TOPIC, EXCHANGE_TYPE_HEADERS
 export read, read!, close, convert, show
 
 end # module

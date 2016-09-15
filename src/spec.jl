@@ -37,13 +37,13 @@ const HardErrorInternalError = 541
 typealias TAMQPConsumerTag TAMQPShortStr
 typealias TAMQPDeliveryTag Int64
 typealias TAMQPExchangeName TAMQPShortStr
-typealias TAMQPNoAck UInt8
-typealias TAMQPNoLocal UInt8
-typealias TAMQPNoWait UInt8
+typealias TAMQPNoAck TAMQPBit
+typealias TAMQPNoLocal TAMQPBit
+typealias TAMQPNoWait TAMQPBit
 typealias TAMQPPath TAMQPShortStr
 typealias TAMQPPeerProperties TAMQPFieldTable
 typealias TAMQPQueueName TAMQPShortStr
-typealias TAMQPRedelivered UInt8
+typealias TAMQPRedelivered TAMQPBit
 typealias TAMQPMessageCount Int32
 typealias TAMQPReplyCode Int16
 typealias TAMQPReplyText TAMQPShortStr
@@ -84,7 +84,7 @@ const CLASS_MAP = Dict{TAMQPClassId,ClassSpec}(
         , 40 => MethodSpec(40, :Open, :OpenOk, Pair{Symbol,DataType}[
             :VirtualHost => TAMQPPath
             , :Reserved1 => TAMQPShortStr
-            , :Reserved2 => UInt8
+            , :Reserved2 => TAMQPBit
         ]) # method Open
         , 41 => MethodSpec(41, :OpenOk, :Void, Pair{Symbol,DataType}[
             :Reserved1 => TAMQPShortStr
@@ -111,10 +111,10 @@ const CLASS_MAP = Dict{TAMQPClassId,ClassSpec}(
             :Reserved1 => TAMQPLongStr
         ]) # method OpenOk
         , 20 => MethodSpec(20, :Flow, :FlowOk, Pair{Symbol,DataType}[
-            :Active => UInt8
+            :Active => TAMQPBit
         ]) # method Flow
         , 21 => MethodSpec(21, :FlowOk, :Void, Pair{Symbol,DataType}[
-            :Active => UInt8
+            :Active => TAMQPBit
         ]) # method FlowOk
         , 40 => MethodSpec(40, :Close, :CloseOk, Pair{Symbol,DataType}[
             :ReplyCode => TAMQPReplyCode
@@ -130,10 +130,10 @@ const CLASS_MAP = Dict{TAMQPClassId,ClassSpec}(
             :Reserved1 => Int16
             , :Exchange => TAMQPExchangeName
             , :Type => TAMQPShortStr
-            , :Passive => UInt8
-            , :Durable => UInt8
-            , :AutoDelete => UInt8
-            , :Internal => UInt8
+            , :Passive => TAMQPBit
+            , :Durable => TAMQPBit
+            , :AutoDelete => TAMQPBit
+            , :Internal => TAMQPBit
             , :NoWait => TAMQPNoWait
             , :Arguments => TAMQPFieldTable
         ]) # method Declare
@@ -142,7 +142,7 @@ const CLASS_MAP = Dict{TAMQPClassId,ClassSpec}(
         , 20 => MethodSpec(20, :Delete, :DeleteOk, Pair{Symbol,DataType}[
             :Reserved1 => Int16
             , :Exchange => TAMQPExchangeName
-            , :IfUnused => UInt8
+            , :IfUnused => TAMQPBit
             , :NoWait => TAMQPNoWait
         ]) # method Delete
         , 21 => MethodSpec(21, :DeleteOk, :Void, Pair{Symbol,DataType}[
@@ -172,10 +172,10 @@ const CLASS_MAP = Dict{TAMQPClassId,ClassSpec}(
         10 => MethodSpec(10, :Declare, :DeclareOk, Pair{Symbol,DataType}[
             :Reserved1 => Int16
             , :Queue => TAMQPQueueName
-            , :Passive => UInt8
-            , :Durable => UInt8
-            , :Exclusive => UInt8
-            , :AutoDelete => UInt8
+            , :Passive => TAMQPBit
+            , :Durable => TAMQPBit
+            , :Exclusive => TAMQPBit
+            , :AutoDelete => TAMQPBit
             , :NoWait => TAMQPNoWait
             , :Arguments => TAMQPFieldTable
         ]) # method Declare
@@ -214,8 +214,8 @@ const CLASS_MAP = Dict{TAMQPClassId,ClassSpec}(
         , 40 => MethodSpec(40, :Delete, :DeleteOk, Pair{Symbol,DataType}[
             :Reserved1 => Int16
             , :Queue => TAMQPQueueName
-            , :IfUnused => UInt8
-            , :IfEmpty => UInt8
+            , :IfUnused => TAMQPBit
+            , :IfEmpty => TAMQPBit
             , :NoWait => TAMQPNoWait
         ]) # method Delete
         , 41 => MethodSpec(41, :DeleteOk, :Void, Pair{Symbol,DataType}[
@@ -226,7 +226,7 @@ const CLASS_MAP = Dict{TAMQPClassId,ClassSpec}(
         10 => MethodSpec(10, :Qos, :QosOk, Pair{Symbol,DataType}[
             :PrefetchSize => Int32
             , :PrefetchCount => Int16
-            , :Global => UInt8
+            , :Global => TAMQPBit
         ]) # method Qos
         , 11 => MethodSpec(11, :QosOk, :Void, Pair{Symbol,DataType}[
         ]) # method QosOk
@@ -236,7 +236,7 @@ const CLASS_MAP = Dict{TAMQPClassId,ClassSpec}(
             , :ConsumerTag => TAMQPConsumerTag
             , :NoLocal => TAMQPNoLocal
             , :NoAck => TAMQPNoAck
-            , :Exclusive => UInt8
+            , :Exclusive => TAMQPBit
             , :NoWait => TAMQPNoWait
             , :Arguments => TAMQPFieldTable
         ]) # method Consume
@@ -254,8 +254,8 @@ const CLASS_MAP = Dict{TAMQPClassId,ClassSpec}(
             :Reserved1 => Int16
             , :Exchange => TAMQPExchangeName
             , :RoutingKey => TAMQPShortStr
-            , :Mandatory => UInt8
-            , :Immediate => UInt8
+            , :Mandatory => TAMQPBit
+            , :Immediate => TAMQPBit
         ]) # method Publish
         , 50 => MethodSpec(50, :Return, :Void, Pair{Symbol,DataType}[
             :ReplyCode => TAMQPReplyCode
@@ -287,24 +287,24 @@ const CLASS_MAP = Dict{TAMQPClassId,ClassSpec}(
         ]) # method GetEmpty
         , 80 => MethodSpec(80, :Ack, :Void, Pair{Symbol,DataType}[
             :DeliveryTag => TAMQPDeliveryTag
-            , :Multiple => UInt8
+            , :Multiple => TAMQPBit
         ]) # method Ack
         , 90 => MethodSpec(90, :Reject, :Void, Pair{Symbol,DataType}[
             :DeliveryTag => TAMQPDeliveryTag
-            , :Requeue => UInt8
+            , :Requeue => TAMQPBit
         ]) # method Reject
         , 100 => MethodSpec(100, :RecoverAsync, :Void, Pair{Symbol,DataType}[
-            :Requeue => UInt8
+            :Requeue => TAMQPBit
         ]) # method RecoverAsync
         , 110 => MethodSpec(110, :Recover, :Void, Pair{Symbol,DataType}[
-            :Requeue => UInt8
+            :Requeue => TAMQPBit
         ]) # method Recover
         , 111 => MethodSpec(111, :RecoverOk, :Void, Pair{Symbol,DataType}[
         ]) # method RecoverOk
         , 120 => MethodSpec(120, :Nack, :Void, Pair{Symbol,DataType}[
             :DeliveryTag => TAMQPDeliveryTag
-            , :Multiple => UInt8
-            , :Requeue => UInt8
+            , :Multiple => TAMQPBit
+            , :Requeue => TAMQPBit
         ]) # method Nack
     )) # class Basic
     , 90 => ClassSpec(90, :Tx, Dict{TAMQPMethodId, MethodSpec}(
@@ -323,7 +323,7 @@ const CLASS_MAP = Dict{TAMQPClassId,ClassSpec}(
     )) # class Tx
     , 85 => ClassSpec(85, :Confirm, Dict{TAMQPMethodId, MethodSpec}(
         10 => MethodSpec(10, :Select, :SelectOk, Pair{Symbol,DataType}[
-            :Nowait => UInt8
+            :Nowait => TAMQPBit
         ]) # method Select
         , 11 => MethodSpec(11, :SelectOk, :Void, Pair{Symbol,DataType}[
         ]) # method SelectOk
