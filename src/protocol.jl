@@ -577,6 +577,56 @@ end
 # ----------------------------------------
 
 # ----------------------------------------
+# Queue begin
+# ----------------------------------------
+"""Declare a queue (or query an existing queue).
+Returns a tuple: (boolean success/failure, queue name, message count, consumer count)
+"""
+function queue_declare(chan::MessageChannel, name::String;
+        passive::Bool=false, durable::Bool=false, exclusive::Bool=false, auto_delete::Bool=false,
+        nowait::Bool=false, timeout::Int=10,
+        arguments::Dict{String,Any}=Dict{String,Any}())
+    _wait_resp(chan, (true, name, TAMQPMessageCount(0), Int32(0)), nowait, on_queue_declare_ok, :Queue, :DeclareOk, (false, name, TAMQPMessageCount(0), Int32(0)), timeout) do
+        send_queue_declare(chan, name, passive, durable, exclusive, auto_delete, nowait, arguments)
+    end
+end
+
+function queue_bind(chan::MessageChannel, queue_name::String, excg_name::String, routing_key::String; nowait::Bool=false, timeout::Int=10, arguments::Dict{String,Any}=Dict{String,Any}())
+    _wait_resp(chan, true, nowait, on_queue_bind_ok, :Queue, :BindOk, false, timeout) do
+        send_queue_bind(chan, queue_name, excg_name, routing_key, nowait, arguments)
+    end
+end
+
+function queue_unbind(chan::MessageChannel, queue_name::String, excg_name::String, routing_key::String; arguments::Dict{String,Any}=Dict{String,Any}(), timeout::Int=10)
+    nowait = false
+    _wait_resp(chan, true, nowait, on_queue_unbind_ok, :Queue, :UnbindOk, false, timeout) do
+        send_queue_unbind(chan, queue_name, excg_name, routing_key, arguments)
+    end
+end
+
+"""Purge messages from a queue.
+Returns a tuple: (boolean success/failure, message count)
+"""
+function queue_purge(chan::MessageChannel, name::String; nowait::Bool=false, timeout::Int=10)
+    _wait_resp(chan, (true,TAMQPMessageCount(0)), nowait, on_queue_purge_ok, :Queue, :PurgeOk, (false,TAMQPMessageCount(0)), timeout) do
+        send_queue_purge(chan, name, nowait)
+    end
+end
+
+"""Delete a queue.
+Returns a tuple: (boolean success/failure, message count)
+"""
+function queue_delete(chan::MessageChannel, name::String; if_unused::Bool=false, if_empty::Bool=false, nowait::Bool=false, timeout::Int=10)
+    _wait_resp(chan, (true,TAMQPMessageCount(0)), nowait, on_queue_delete_ok, :Queue, :DeleteOk, (false,TAMQPMessageCount(0)), timeout) do
+        send_queue_delete(chan, name, if_unused, if_empty, nowait)
+    end
+end
+
+# ----------------------------------------
+# Queue end
+# ----------------------------------------
+
+# ----------------------------------------
 # send and recv for methods begin
 # ----------------------------------------
 
@@ -861,6 +911,77 @@ on_exchange_declare_ok(chan::MessageChannel, m::TAMQPMethodFrame, ctx) = _on_ack
 on_exchange_delete_ok(chan::MessageChannel, m::TAMQPMethodFrame, ctx) = _on_ack(chan, m, :Exchange, :DeleteOk, ctx)
 on_exchange_bind_ok(chan::MessageChannel, m::TAMQPMethodFrame, ctx) = _on_ack(chan, m, :Exchange, :BindOk, ctx)
 on_exchange_unbind_ok(chan::MessageChannel, m::TAMQPMethodFrame, ctx) = _on_ack(chan, m, :Exchange, :UnbindOk, ctx)
+
+function send_queue_declare(chan::MessageChannel, name::String,
+        passive::Bool=false, durable::Bool=false, exclusive::Bool=false, auto_delete::Bool=false, nowait::Bool=false,
+        arguments::Dict{String,Any}=Dict{String,Any}())
+    props = TAMQPFrameProperties(chan.id,0)
+    payload = TAMQPMethodPayload(:Queue, :Declare, (0, name, passive, durable, exclusive, auto_delete, nowait, arguments))
+    @logmsg("sending Queue Declare")
+    send(chan, TAMQPMethodFrame(props, payload))
+    nothing
+end
+
+function send_queue_bind(chan::MessageChannel, queue_name::String, excg_name::String, routing_key::String,
+        nowait::Bool=false, arguments::Dict{String,Any}=Dict{String,Any}())
+    props = TAMQPFrameProperties(chan.id,0)
+    payload = TAMQPMethodPayload(:Queue, :Bind, (0, queue_name, excg_name, routing_key, nowait, arguments))
+    @logmsg("sending Queue Bind")
+    send(chan, TAMQPMethodFrame(props, payload))
+    nothing
+end
+
+function send_queue_unbind(chan::MessageChannel, queue_name::String, excg_name::String, routing_key::String,
+        arguments::Dict{String,Any}=Dict{String,Any}())
+    props = TAMQPFrameProperties(chan.id,0)
+    payload = TAMQPMethodPayload(:Queue, :Unbind, (0, queue_name, excg_name, routing_key, arguments))
+    @logmsg("sending Queue Unbind")
+    send(chan, TAMQPMethodFrame(props, payload))
+    nothing
+end
+
+function send_queue_purge(chan::MessageChannel, name::String, nowait::Bool=false)
+    props = TAMQPFrameProperties(chan.id,0)
+    payload = TAMQPMethodPayload(:Queue, :Purge, (0, name, nowait))
+    @logmsg("sending Queue Purge")
+    send(chan, TAMQPMethodFrame(props, payload))
+    nothing
+end
+
+function send_queue_delete(chan::MessageChannel, name::String, if_unused::Bool=false, if_empty::Bool=false, nowait::Bool=false)
+    props = TAMQPFrameProperties(chan.id,0)
+    payload = TAMQPMethodPayload(:Queue, :Delete, (0, name, if_unused, if_empty, nowait))
+    @logmsg("sending Queue Delete")
+    send(chan, TAMQPMethodFrame(props, payload))
+    nothing
+end
+
+function on_queue_declare_ok(chan::MessageChannel, m::TAMQPMethodFrame, ctx)
+    @assert is_method(m, :Queue, :DeclareOk)
+    if ctx !== nothing
+        name = convert(String, m.payload.fields[1].second)
+        msg_count = m.payload.fields[2].second
+        consumer_count = m.payload.fields[3].second
+        put!(ctx, (true, name, msg_count, consumer_count))
+    end
+    handle(chan, :Queue, :DeclareOk)
+    nothing
+end
+
+function _on_queue_purge_delete_ok(method::Symbol, chan::MessageChannel, m::TAMQPMethodFrame, ctx)
+    @assert is_method(m, :Queue, method)
+    if ctx !== nothing
+        msg_count = m.payload.fields[1].second
+        put!(ctx, (true, msg_count))
+    end
+    handle(chan, :Queue, method)
+    nothing
+end
+
+on_queue_purge_ok(chan::MessageChannel, m::TAMQPMethodFrame, ctx) = _on_queue_purge_delete_ok(:PurgeOk, chan, m, ctx)
+on_queue_delete_ok(chan::MessageChannel, m::TAMQPMethodFrame, ctx) = _on_queue_purge_delete_ok(:DeleteOk, chan, m, ctx)
+on_queue_bind_ok(chan::MessageChannel, m::TAMQPMethodFrame, ctx) = _on_ack(chan, m, :Queue, :BindOk, ctx)
+on_queue_unbind_ok(chan::MessageChannel, m::TAMQPMethodFrame, ctx) = _on_ack(chan, m, :Queue, :UnbindOk, ctx)
 
 # ----------------------------------------
 # send and recv for methods end
