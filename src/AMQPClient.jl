@@ -33,6 +33,7 @@ include("show.jl")
 export connection, channel
 export exchange_declare, exchange_delete, exchange_bind, exchange_unbind
 export queue_declare, queue_bind, queue_unbind, queue_purge, queue_delete
+export tx_select, tx_commit, tx_rollback
 export EXCHANGE_TYPE_DIRECT, EXCHANGE_TYPE_FANOUT, EXCHANGE_TYPE_TOPIC, EXCHANGE_TYPE_HEADERS
 export read, read!, close, convert, show
 

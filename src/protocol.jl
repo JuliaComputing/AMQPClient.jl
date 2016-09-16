@@ -627,6 +627,25 @@ end
 # ----------------------------------------
 
 # ----------------------------------------
+# Tx begin
+# ----------------------------------------
+
+function _tx(sendmethod, chan::MessageChannel, respmethod::Symbol, on_resp, timeout::Int)
+    nowait = false
+    _wait_resp(chan, true, nowait, on_resp, :Tx, respmethod, false, timeout) do
+        sendmethod(chan)
+    end
+end
+
+tx_select(chan::MessageChannel; timeout::Int=10) = _tx(send_tx_select, chan, :SelectOk, on_tx_select_ok, timeout)
+tx_commit(chan::MessageChannel; timeout::Int=10) = _tx(send_tx_commit, chan, :CommitOk, on_tx_commit_ok, timeout)
+tx_rollback(chan::MessageChannel; timeout::Int=10) = _tx(send_tx_rollback, chan, :RollbackOk, on_tx_rollback_ok, timeout)
+
+# ----------------------------------------
+# Tx end
+# ----------------------------------------
+
+# ----------------------------------------
 # send and recv for methods begin
 # ----------------------------------------
 
@@ -982,6 +1001,22 @@ on_queue_purge_ok(chan::MessageChannel, m::TAMQPMethodFrame, ctx) = _on_queue_pu
 on_queue_delete_ok(chan::MessageChannel, m::TAMQPMethodFrame, ctx) = _on_queue_purge_delete_ok(:DeleteOk, chan, m, ctx)
 on_queue_bind_ok(chan::MessageChannel, m::TAMQPMethodFrame, ctx) = _on_ack(chan, m, :Queue, :BindOk, ctx)
 on_queue_unbind_ok(chan::MessageChannel, m::TAMQPMethodFrame, ctx) = _on_ack(chan, m, :Queue, :UnbindOk, ctx)
+
+function _send_tx(chan::MessageChannel, method::Symbol)
+    props = TAMQPFrameProperties(chan.id,0)
+    payload = TAMQPMethodPayload(:Tx, method, ())
+    @logmsg("sending Tx $method")
+    send(chan, TAMQPMethodFrame(props, payload))
+    nothing
+end
+
+send_tx_select(chan::MessageChannel) = _send_tx(chan, :Select)
+send_tx_commit(chan::MessageChannel) = _send_tx(chan, :Commit)
+send_tx_rollback(chan::MessageChannel) = _send_tx(chan, :Rollback)
+
+on_tx_select_ok(chan::MessageChannel, m::TAMQPMethodFrame, ctx) = _on_ack(chan, m, :Tx, :SelectOk, ctx)
+on_tx_commit_ok(chan::MessageChannel, m::TAMQPMethodFrame, ctx) = _on_ack(chan, m, :Tx, :CommitOk, ctx)
+on_tx_rollback_ok(chan::MessageChannel, m::TAMQPMethodFrame, ctx) = _on_ack(chan, m, :Tx, :RollbackOk, ctx)
 
 # ----------------------------------------
 # send and recv for methods end
