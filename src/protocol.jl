@@ -109,6 +109,12 @@ function narrow_frame(f::TAMQPGenericFrame)
     throw(AMQPProtocolException("Unknown frame type $(f.hdr)"))
 end
 
+function method_name(payload::TAMQPMethodPayload)
+    c = CLASS_MAP[payload.class]
+    m = c.method_map[payload.method]
+    #(c.name, m.name)
+    string(c.name) * "." * string(m.name)
+end
 
 """
 Validate if the method frame is for the given class and method.
@@ -211,7 +217,14 @@ get_property(c::MessageChannel, s::Symbol, default) = get_property(c.conn, s, de
 get_property(c::Connection, s::Symbol, default) = get(c.properties, s, default)
 
 send(c::MessageChannel, f) = send(c.conn, f)
-send(c::Connection, f) = put!(c.sendq, TAMQPGenericFrame(f))
+function send(c::Connection, f)
+    put!(c.sendq, TAMQPGenericFrame(f))
+    nothing
+end
+function send(c::MessageChannel, payload::TAMQPMethodPayload)
+    @logmsg("sending $(method_name(payload))")
+    send(c, TAMQPMethodFrame(TAMQPFrameProperties(chan.id,0), payload))
+end
 
 # ----------------------------------------
 # Async message handler framework begin
@@ -646,6 +659,57 @@ tx_rollback(chan::MessageChannel; timeout::Int=10) = _tx(send_tx_rollback, chan,
 # ----------------------------------------
 
 # ----------------------------------------
+# Basic begin
+# ----------------------------------------
+
+function basic_qos(chan::MessageChannel, prefetch_size, prefetch_count, apply_global::Bool; timeout::Int=10)
+    nowait = false
+    _wait_resp(chan, true, nowait, on_basic_qos_ok, :Basic, :QosOk, false, timeout) do
+        send_basic_qos(chan, prefetch_size, prefetch_count, apply_global)
+    end
+end
+
+"""Start a queue consumer.
+
+queue: queue name
+consumer_tag: id of the consumer, server generates a unique tag if this is empty
+no_local: do not deliver own messages
+no_ack: no acknowledgment needed, server automatically and silently acknowledges delivery (speed at the cost of reliability)
+exclusive: request exclusive access (only this consumer can access the queue)
+nowait: do not send a reply method
+"""
+function basic_consume(chan::MessageChannel, queue::String; consumer_tag::String="", no_local::Bool=false, no_ack::Bool=false,
+    exclusive::Bool=false, nowait::Bool=false, arguments::Dict{String,Any}=Dict{String,Any}(), timeout::Int=10)
+    _wait_resp(chan, (true, ""), nowait, on_basic_consume_ok, :Basic, :ConsumeOk, (false, ""), timeout) do
+        send_basic_consume(chan, queue, consumer_tag, no_local, no_ack, exclusive, nowait, arguments)
+    end
+end
+
+function basic_cancel(chan::MessageChannel, consumer_tag::String; nowait::Bool=false, timeout::Int=10)
+    _wait_resp(chan, (true, ""), nowait, on_basic_cancel_ok, :Basic, :CancelOk, (false, ""), timeout) do
+        send_basic_cancel(chan, consumer_tag, nowait)
+    end
+end
+
+function basic_publish()
+end
+function basic_get()
+end
+function basic_ack()
+end
+function basic_reject()
+end
+function basic_recover_async()
+end
+function basic_recover()
+end
+
+
+# ----------------------------------------
+# Basic end
+# ----------------------------------------
+
+# ----------------------------------------
 # send and recv for methods begin
 # ----------------------------------------
 
@@ -668,13 +732,7 @@ function _on_ack(chan::MessageChannel, m::TAMQPMethodFrame, class::Symbol, metho
     nothing
 end
 
-function _send_close_ok(context_class::Symbol, chan::MessageChannel)
-    props = TAMQPFrameProperties(chan.id,0)
-    payload = TAMQPMethodPayload(context_class, :CloseOk, ())
-    @logmsg("sending $context_class CloseOk")
-    send(chan, TAMQPMethodFrame(props, payload))
-    nothing
-end
+_send_close_ok(context_class::Symbol, chan::MessageChannel) = send(chan, TAMQPMethodPayload(context_class, :CloseOk, ()))
 
 function _on_close_ok(context_class::Symbol, chan::MessageChannel, m::TAMQPMethodFrame, ctx)
     @assert is_method(m, context_class, :CloseOk)
@@ -692,14 +750,8 @@ function _send_close(context_class::Symbol, chan::MessageChannel, reply_code=Rep
     _send_close(context_class, chan.conn, reply_code, reply_text, class_id, method_id, chan.id)
 end
 
-function _send_close(context_class::Symbol, conn::Connection, reply_code=ReplySuccess, reply_text="", class_id=0, method_id=0, chan_id=0)
-    props = TAMQPFrameProperties(chan_id,0)
-    payload = TAMQPMethodPayload(context_class, :Close, (TAMQPReplyCode(reply_code), TAMQPReplyText(reply_text), TAMQPClassId(class_id), TAMQPMethodId(method_id)))
-    # CloseOk is always handled on channels/connections
-    @logmsg("sending $context_class Close")
-    send(conn, TAMQPMethodFrame(props, payload))
-    nothing
-end
+_send_close(context_class::Symbol, conn::Connection, reply_code=ReplySuccess, reply_text="", class_id=0, method_id=0, chan_id=0) =
+    send(conn, TAMQPMethodPayload(context_class, :Close, (TAMQPReplyCode(reply_code), TAMQPReplyText(reply_text), TAMQPClassId(class_id), TAMQPMethodId(method_id))))
 
 send_connection_close_ok(chan::MessageChannel) = _send_close_ok(:Connection, chan)
 on_connection_close_ok(chan::MessageChannel, m::TAMQPMethodFrame, ctx) = _on_close_ok(:Connection, chan, m, ctx)
@@ -751,7 +803,7 @@ function on_connection_start(chan::MessageChannel, m::TAMQPMethodFrame, ctx)
     nothing
 end
 
-function send_connection_start_ok(chan::MessageChannel, auth_params::Dict{String,Any}=Dict{String,Any}())
+function send_connection_start_ok(chan::MessageChannel, auth_params::Dict{String,Any})
     conn = chan.conn
 
     # set up client_props
@@ -787,10 +839,7 @@ function send_connection_start_ok(chan::MessageChannel, auth_params::Dict{String
     auth_resp = AUTH_PROVIDERS[mechanism](auth_params)
     @logmsg("auth_resp: $(auth_resp)")
 
-    props = TAMQPFrameProperties(chan.id,0)
-    payload = TAMQPMethodPayload(:Connection, :StartOk, (client_props, mechanism, auth_resp, client_locale))
-    @logmsg("sending Connection StartOk")
-    send(chan, TAMQPMethodFrame(props, payload))
+    send(chan, TAMQPMethodPayload(:Connection, :StartOk, (client_props, mechanism, auth_resp, client_locale)))
     nothing
 end
 
@@ -824,24 +873,15 @@ function send_connection_tune_ok(chan::MessageChannel, channelmax=0, framemax=0,
         conn.heartbeat = max(conn.heartbeat, heartbeat)
     end
 
-    props = TAMQPFrameProperties(chan.id,0)
     @logmsg("channelmax: $(conn.channelmax), framemax: $(conn.framemax), heartbeat: $(conn.heartbeat)")
-    payload = TAMQPMethodPayload(:Connection, :TuneOk, (conn.channelmax, conn.framemax, conn.heartbeat))
-    @logmsg("sending Connection TuneOk")
-    send(chan, TAMQPMethodFrame(props, payload))
+    send(chan, TAMQPMethodPayload(:Connection, :TuneOk, (conn.channelmax, conn.framemax, conn.heartbeat)))
 
     # start heartbeat timer
     conn.heartbeater = @async connection_processor(conn, "HeartBeater", connection_heartbeater)
     nothing
 end
 
-function send_connection_open(chan::MessageChannel)
-    props = TAMQPFrameProperties(chan.id,0)
-    payload = TAMQPMethodPayload(:Connection, :Open, (chan.conn.virtualhost, "", false))
-    @logmsg("sending Connection Open")
-    send(chan, TAMQPMethodFrame(props, payload))
-    nothing
-end
+send_connection_open(chan::MessageChannel) = send(chan, TAMQPMethodPayload(:Connection, :Open, (chan.conn.virtualhost, "", false)))
 
 function on_connection_open_ok(chan::MessageChannel, m::TAMQPMethodFrame, ctx)
     @assert is_method(m, :Connection, :OpenOk)
@@ -857,22 +897,11 @@ function on_connection_open_ok(chan::MessageChannel, m::TAMQPMethodFrame, ctx)
     nothing
 end
 
-function on_connection_heartbeat(chan::MessageChannel, h::TAMQPHeartBeatFrame, ctx)
-    nothing
-end
+send_connection_heartbeat(conn::Connection) = send(conn, TAMQPHeartBeatFrame())
+on_connection_heartbeat(chan::MessageChannel, h::TAMQPHeartBeatFrame, ctx) = nothing
 
-function send_connection_heartbeat(conn::Connection)
-    send(conn, TAMQPHeartBeatFrame())
-    nothing
-end
-
-function send_channel_open(chan::MessageChannel)
-    props = TAMQPFrameProperties(chan.id,0)
-    payload = TAMQPMethodPayload(:Channel, :Open, ("",))
-    @logmsg("sending Channel Open")
-    send(chan, TAMQPMethodFrame(props, payload))
-    nothing
-end
+send_channel_open(chan::MessageChannel) = send(chan, TAMQPMethodPayload(:Channel, :Open, ("",)))
+send_channel_flow(chan::MessageChannel, flow::Bool) = send(chan, TAMQPMethodPayload(:Channel, :Flow, (flow,)))
 
 function on_channel_open_ok(chan::MessageChannel, m::TAMQPMethodFrame, ctx)
     chan.state = CONN_STATE_OPEN
@@ -883,14 +912,6 @@ function on_channel_open_ok(chan::MessageChannel, m::TAMQPMethodFrame, ctx)
     nothing
 end
 
-function send_channel_flow(chan::MessageChannel, flow::Bool)
-    props = TAMQPFrameProperties(chan.id,0)
-    payload = TAMQPMethodPayload(:Channel, :Flow, (flow,))
-    @logmsg("sending Channel Flow")
-    send(chan, TAMQPMethodFrame(props, payload))
-    nothing
-end
-
 function on_channel_flow(chan::MessageChannel, m::TAMQPMethodFrame, ctx)
     @assert is_method(m, :Channel, ctx)
     chan.flow = m.payload.fields[1].second
@@ -898,82 +919,26 @@ function on_channel_flow(chan::MessageChannel, m::TAMQPMethodFrame, ctx)
     nothing
 end
 
-function send_exchange_declare(chan::MessageChannel, name::String, typ::String,
-        passive::Bool=false, durable::Bool=false, auto_delete::Bool=false, nowait::Bool=false,
-        arguments::Dict{String,Any}=Dict{String,Any}())
-    props = TAMQPFrameProperties(chan.id,0)
-    payload = TAMQPMethodPayload(:Exchange, :Declare, (0, name, typ, passive, durable, auto_delete, false, nowait, arguments))
-    @logmsg("sending Exchange Declare")
-    send(chan, TAMQPMethodFrame(props, payload))
-    nothing
-end
-
-function send_exchange_delete(chan::MessageChannel, name::String, if_unused::Bool, nowait::Bool)
-    props = TAMQPFrameProperties(chan.id,0)
-    payload = TAMQPMethodPayload(:Exchange, :Delete, (0, name, if_unused, nowait))
-    @logmsg("sending Exchange Delete")
-    send(chan, TAMQPMethodFrame(props, payload))
-    nothing
-end
-
-function _send_exchange_bind_unbind(chan::MessageChannel, meth::Symbol, dest::String, src::String, routing_key::String, nowait::Bool, arguments::Dict{String,Any})
-    props = TAMQPFrameProperties(chan.id,0)
-    payload = TAMQPMethodPayload(:Exchange, meth, (0, dest, src, routing_key, nowait, arguments))
-    @logmsg("sending Exchange $meth")
-    send(chan, TAMQPMethodFrame(props, payload))
-    nothing
-end
-send_exchange_bind(chan::MessageChannel, dest::String, src::String, routing_key::String, nowait::Bool, arguments::Dict{String,Any}=Dict{String,Any}()) = _send_exchange_bind_unbind(chan, :Bind, dest, src, routing_key, nowait, arguments)
-send_exchange_unbind(chan::MessageChannel, dest::String, src::String, routing_key::String, nowait::Bool, arguments::Dict{String,Any}=Dict{String,Any}()) = _send_exchange_bind_unbind(chan, :Unbind, dest, src, routing_key, nowait, arguments)
+send_exchange_declare(chan::MessageChannel, name::String, typ::String, passive::Bool, durable::Bool, auto_delete::Bool, nowait::Bool, arguments::Dict{String,Any}) =
+    send(chan, TAMQPMethodPayload(:Exchange, :Declare, (0, name, typ, passive, durable, auto_delete, false, nowait, arguments)))
+send_exchange_delete(chan::MessageChannel, name::String, if_unused::Bool, nowait::Bool) = send(chan, TAMQPMethodPayload(:Exchange, :Delete, (0, name, if_unused, nowait)))
+_send_exchange_bind_unbind(chan::MessageChannel, meth::Symbol, dest::String, src::String, routing_key::String, nowait::Bool, arguments::Dict{String,Any}) =
+    send(chan, TAMQPMethodPayload(:Exchange, meth, (0, dest, src, routing_key, nowait, arguments)))
+send_exchange_bind(chan::MessageChannel, dest::String, src::String, routing_key::String, nowait::Bool, arguments::Dict{String,Any}) = _send_exchange_bind_unbind(chan, :Bind, dest, src, routing_key, nowait, arguments)
+send_exchange_unbind(chan::MessageChannel, dest::String, src::String, routing_key::String, nowait::Bool, arguments::Dict{String,Any}) = _send_exchange_bind_unbind(chan, :Unbind, dest, src, routing_key, nowait, arguments)
 
 on_exchange_declare_ok(chan::MessageChannel, m::TAMQPMethodFrame, ctx) = _on_ack(chan, m, :Exchange, :DeclareOk, ctx)
 on_exchange_delete_ok(chan::MessageChannel, m::TAMQPMethodFrame, ctx) = _on_ack(chan, m, :Exchange, :DeleteOk, ctx)
 on_exchange_bind_ok(chan::MessageChannel, m::TAMQPMethodFrame, ctx) = _on_ack(chan, m, :Exchange, :BindOk, ctx)
 on_exchange_unbind_ok(chan::MessageChannel, m::TAMQPMethodFrame, ctx) = _on_ack(chan, m, :Exchange, :UnbindOk, ctx)
 
-function send_queue_declare(chan::MessageChannel, name::String,
-        passive::Bool=false, durable::Bool=false, exclusive::Bool=false, auto_delete::Bool=false, nowait::Bool=false,
-        arguments::Dict{String,Any}=Dict{String,Any}())
-    props = TAMQPFrameProperties(chan.id,0)
-    payload = TAMQPMethodPayload(:Queue, :Declare, (0, name, passive, durable, exclusive, auto_delete, nowait, arguments))
-    @logmsg("sending Queue Declare")
-    send(chan, TAMQPMethodFrame(props, payload))
-    nothing
-end
-
-function send_queue_bind(chan::MessageChannel, queue_name::String, excg_name::String, routing_key::String,
-        nowait::Bool=false, arguments::Dict{String,Any}=Dict{String,Any}())
-    props = TAMQPFrameProperties(chan.id,0)
-    payload = TAMQPMethodPayload(:Queue, :Bind, (0, queue_name, excg_name, routing_key, nowait, arguments))
-    @logmsg("sending Queue Bind")
-    send(chan, TAMQPMethodFrame(props, payload))
-    nothing
-end
-
-function send_queue_unbind(chan::MessageChannel, queue_name::String, excg_name::String, routing_key::String,
-        arguments::Dict{String,Any}=Dict{String,Any}())
-    props = TAMQPFrameProperties(chan.id,0)
-    payload = TAMQPMethodPayload(:Queue, :Unbind, (0, queue_name, excg_name, routing_key, arguments))
-    @logmsg("sending Queue Unbind")
-    send(chan, TAMQPMethodFrame(props, payload))
-    nothing
-end
-
-function send_queue_purge(chan::MessageChannel, name::String, nowait::Bool=false)
-    props = TAMQPFrameProperties(chan.id,0)
-    payload = TAMQPMethodPayload(:Queue, :Purge, (0, name, nowait))
-    @logmsg("sending Queue Purge")
-    send(chan, TAMQPMethodFrame(props, payload))
-    nothing
-end
-
-function send_queue_delete(chan::MessageChannel, name::String, if_unused::Bool=false, if_empty::Bool=false, nowait::Bool=false)
-    props = TAMQPFrameProperties(chan.id,0)
-    payload = TAMQPMethodPayload(:Queue, :Delete, (0, name, if_unused, if_empty, nowait))
-    @logmsg("sending Queue Delete")
-    send(chan, TAMQPMethodFrame(props, payload))
-    nothing
-end
+send_queue_declare(chan::MessageChannel, name::String, passive::Bool, durable::Bool, exclusive::Bool, auto_delete::Bool, nowait::Bool, arguments::Dict{String,Any}) =
+    send(chan, TAMQPMethodPayload(:Queue, :Declare, (0, name, passive, durable, exclusive, auto_delete, nowait, arguments)))
+send_queue_bind(chan::MessageChannel, queue_name::String, excg_name::String, routing_key::String, nowait::Bool, arguments::Dict{String,Any}) =
+    send(chan, TAMQPMethodPayload(:Queue, :Bind, (0, queue_name, excg_name, routing_key, nowait, arguments)))
+send_queue_unbind(chan::MessageChannel, queue_name::String, excg_name::String, routing_key::String, arguments::Dict{String,Any}) = send(chan, TAMQPMethodPayload(:Queue, :Unbind, (0, queue_name, excg_name, routing_key, arguments)))
+send_queue_purge(chan::MessageChannel, name::String, nowait::Bool) = send(chan, TAMQPMethodPayload(:Queue, :Purge, (0, name, nowait)))
+send_queue_delete(chan::MessageChannel, name::String, if_unused::Bool, if_empty::Bool, nowait::Bool) = send(chan, TAMQPMethodPayload(:Queue, :Delete, (0, name, if_unused, if_empty, nowait)))
 
 function on_queue_declare_ok(chan::MessageChannel, m::TAMQPMethodFrame, ctx)
     @assert is_method(m, :Queue, :DeclareOk)
@@ -1002,14 +967,7 @@ on_queue_delete_ok(chan::MessageChannel, m::TAMQPMethodFrame, ctx) = _on_queue_p
 on_queue_bind_ok(chan::MessageChannel, m::TAMQPMethodFrame, ctx) = _on_ack(chan, m, :Queue, :BindOk, ctx)
 on_queue_unbind_ok(chan::MessageChannel, m::TAMQPMethodFrame, ctx) = _on_ack(chan, m, :Queue, :UnbindOk, ctx)
 
-function _send_tx(chan::MessageChannel, method::Symbol)
-    props = TAMQPFrameProperties(chan.id,0)
-    payload = TAMQPMethodPayload(:Tx, method, ())
-    @logmsg("sending Tx $method")
-    send(chan, TAMQPMethodFrame(props, payload))
-    nothing
-end
-
+_send_tx(chan::MessageChannel, method::Symbol) = send(chan, TAMQPMethodPayload(:Tx, method, ()))
 send_tx_select(chan::MessageChannel) = _send_tx(chan, :Select)
 send_tx_commit(chan::MessageChannel) = _send_tx(chan, :Commit)
 send_tx_rollback(chan::MessageChannel) = _send_tx(chan, :Rollback)
@@ -1017,6 +975,26 @@ send_tx_rollback(chan::MessageChannel) = _send_tx(chan, :Rollback)
 on_tx_select_ok(chan::MessageChannel, m::TAMQPMethodFrame, ctx) = _on_ack(chan, m, :Tx, :SelectOk, ctx)
 on_tx_commit_ok(chan::MessageChannel, m::TAMQPMethodFrame, ctx) = _on_ack(chan, m, :Tx, :CommitOk, ctx)
 on_tx_rollback_ok(chan::MessageChannel, m::TAMQPMethodFrame, ctx) = _on_ack(chan, m, :Tx, :RollbackOk, ctx)
+
+send_basic_qos(chan::MessageChannel, prefetch_size, prefetch_count, apply_global::Bool) = send(chan, TAMQPMethodPayload(:Basic, :Qos, (prefetch_size, prefetch_count, apply_global)))
+
+send_basic_consume(chan::MessageChannel, queue::String, consumer_tag::String, no_local::Bool, no_ack::Bool, exclusive::Bool, nowait::Bool, arguments::Dict{String,Any}) =
+    send(chan, TAMQPMethodPayload(:Basic, :Consume, (0, queue, consumer_tag, no_local, no_ack, exclusive, nowait, arguments)))
+
+send_basic_cancel(chan::MessageChannel, consumer_tag::String, nowait::Bool) = send(chan, TAMQPMethodPayload(:Basic, :Cancel, (consumer_tag, nowait)))
+
+on_basic_qos_ok(chan::MessageChannel, m::TAMQPMethodFrame, ctx) = _on_ack(chan, m, :Basic, :QosOk, ctx)
+function on_basic_consume_cancel_ok(method::Symbol, chan::MessageChannel, m::TAMQPMethodFrame, ctx)
+    @assert is_method(m, :Basic, method)
+    if ctx !== nothing
+        consumer_tag = convert(String, m.payload.fields[1].second)
+        put!(ctx, (true, consumer_tag))
+    end
+    handle(chan, :Basic, method)
+    nothing
+end
+on_basic_consume_ok(chan::MessageChannel, m::TAMQPMethodFrame, ctx) = _on_basic_consume_cancel_ok(:ConsumeOk, chan, m, ctx)
+on_basic_cancel_ok(chan::MessageChannel, m::TAMQPMethodFrame, ctx) = _on_basic_consume_cancel_ok(:CancelOk, chan, m, ctx)
 
 # ----------------------------------------
 # send and recv for methods end
