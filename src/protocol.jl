@@ -534,7 +534,7 @@ function _wait_resp{T}(sendmethod, chan::MessageChannel, default_result::T,
         reply = Channel{T}(1)
         # timer to time the request out, in case of an error
         t = Timer((t)->try put!(reply, timeout_result) end, timeout)
-        # register a callback for declare ok
+        # register a callback
         handle(chan, resp_class, resp_meth, resp_handler, reply)
     end
 
@@ -691,17 +691,38 @@ function basic_cancel(chan::MessageChannel, consumer_tag::String; nowait::Bool=f
     end
 end
 
-function basic_publish()
+function basic_publish(chan::MessageChannel, exchange::String, routing_key::String; mandatory::Bool=false, immediate::Bool=false)
+    send_basic_publish(chan, exchange, routing_key, mandatory, immediate)
 end
-function basic_get()
+
+const GET_EMPTY_RESP = (false, TAMQPDeliveryTag(0), false, "", "", TAMQPMessageCount(0))
+function basic_get(chan::MessageChannel, queue::String, noack::Bool)
+    result = GET_EMPTY_RESP
+    reply = Channel{typeof(GET_EMPTY_RESP)}(1)
+
+    # register callbacks
+    # TODO: it may make sense to have this callback registered always for efficiency
+    handle(chan, :Basic, :GetOk, on_basic_get_empty_or_ok, reply)
+    handle(chan, :Basic, :GetEmpty, on_basic_get_empty_or_ok, reply)
+
+    send_basic_get(chan, queue, noack)
+
+    # wait for response
+    result = take!(reply)
+    handle(chan, :Basic, :GetOk)
+    handle(chan, :Basic, :GetEmpty)
+    close(reply)
+
+    result
 end
-function basic_ack()
-end
-function basic_reject()
-end
-function basic_recover_async()
-end
-function basic_recover()
+
+basic_ack(chan::MessageChannel, delivery_tag::TAMQPDeliveryTag; all_upto::Bool=false) = send_basic_ack(chan, delivery_tag, all_upto)
+basic_reject(chan::MessageChannel, delivery_tag::TAMQPDeliveryTag; requeue::Bool=false) = send_basic_reject(chan, delivery_tag, requeue)
+
+function basic_recover(chan::MessageChannel, requeue::Bool=false; async::Bool=false, timeout::Int=10)
+    _wait_resp(chan, true, async, on_basic_recover_ok, :Basic, :RecoverOk, false, timeout) do
+        send_basic_recover(chan, requeue, async)
+    end
 end
 
 
@@ -982,6 +1003,10 @@ send_basic_consume(chan::MessageChannel, queue::String, consumer_tag::String, no
     send(chan, TAMQPMethodPayload(:Basic, :Consume, (0, queue, consumer_tag, no_local, no_ack, exclusive, nowait, arguments)))
 
 send_basic_cancel(chan::MessageChannel, consumer_tag::String, nowait::Bool) = send(chan, TAMQPMethodPayload(:Basic, :Cancel, (consumer_tag, nowait)))
+send_basic_publish(chan::MessageChannel, exchange::String, routing_key::String, mandatory::Bool=false, immediate::Bool=false) = send(chan, TAMQPMethodPayload(:Basic, :Publish, (0, exchange, routing_key, mandatory, immediate)))
+send_basic_ack(chan::MessageChannel, delivery_tag::TAMQPDeliveryTag, all_upto::Bool) = send(chan, TAMQPMethodPayload(:Basic, :Ack, (delivery_tag, all_upto)))
+send_basic_reject(chan::MessageChannel, delivery_tag::TAMQPDeliveryTag, requeue::Bool) = send(chan, TAMQPMethodPayload(:Basic, :Reject, (delivery_tag, requeue)))
+send_basic_recover(chan::MessageChannel, requeue::Bool, async::Bool) = send(chan, TAMQPMethodPayload(:Basic, async ? :RecoverAsync : :Recover, (requeue,)))
 
 on_basic_qos_ok(chan::MessageChannel, m::TAMQPMethodFrame, ctx) = _on_ack(chan, m, :Basic, :QosOk, ctx)
 function on_basic_consume_cancel_ok(method::Symbol, chan::MessageChannel, m::TAMQPMethodFrame, ctx)
@@ -995,6 +1020,21 @@ function on_basic_consume_cancel_ok(method::Symbol, chan::MessageChannel, m::TAM
 end
 on_basic_consume_ok(chan::MessageChannel, m::TAMQPMethodFrame, ctx) = _on_basic_consume_cancel_ok(:ConsumeOk, chan, m, ctx)
 on_basic_cancel_ok(chan::MessageChannel, m::TAMQPMethodFrame, ctx) = _on_basic_consume_cancel_ok(:CancelOk, chan, m, ctx)
+on_basic_recover_ok(chan::MessageChannel, m::TAMQPMethodFrame, ctx) = _on_ack(chan, m, :Basic, :RecoverOk, ctx)
+
+function on_basic_get_empty_or_ok(chan::MessageChannel, m::TAMQPMethodFrame, ctx)
+    if is_method(m, :Basic, :GetEmpty)
+        put!(ctx, GET_EMPTY_RESP)
+    else
+        delivery_tag = m.payload.fields[1].second
+        redelivered = convert(Bool, m.payload.fields[2].second)
+        exchange = convert(String, m.payload.fields[3].second)
+        routing_key = convert(String, m.payload.fields[4].second)
+        message_count = m.payload.fields[5].second
+        put!(ctx, (true, delivery_tag, redelivered, exchange, routing_key, message_count))
+    end
+    nothing
+end
 
 # ----------------------------------------
 # send and recv for methods end
