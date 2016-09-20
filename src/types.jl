@@ -105,12 +105,12 @@ const FieldValueIndicatorMap = Dict{Char,Type}(
 
 const FieldIndicatorMap = Dict{Type,Char}(v=>n for (n,v) in FieldValueIndicatorMap)
 
-typealias TAMQPContentClass     TAMQPOctet
 typealias TAMQPChannel          TAMQPShortUInt
 typealias TAMQPPayloadSize      TAMQPLongUInt
 typealias TAMQPContentBodySize  TAMQPLongLongUInt
 typealias TAMQPClassId          UInt16
 typealias TAMQPMethodId         UInt16
+typealias TAMQPContentClass     TAMQPClassId
 
 immutable TAMQPFrameProperties
     channel::TAMQPChannel
@@ -118,11 +118,13 @@ immutable TAMQPFrameProperties
 end
 
 immutable TAMQPPropertyFlags
-    hdr::UInt16
+    flags::UInt16
     nextval::Nullable{TAMQPPropertyFlags}
 end
+TAMQPPropertyFlags(flags::UInt16) = TAMQPPropertyFlags(flags, nothing)
 
 immutable TAMQPBodyPayload
+    # TODO: may be better to allow sub arrays, for efficient writing of large messages
     data::Vector{TAMQPOctet}
 end
 
@@ -172,10 +174,35 @@ end
 
 immutable TAMQPHeaderPayload
     class::TAMQPContentClass
-    weight::UInt8   # must be ContentWeight
+    weight::UInt16  # must be ContentWeight
     bodysize::TAMQPContentBodySize
     propflags::TAMQPPropertyFlags
-    proplist::Vector{TAMQPField}
+    proplist::Dict{Symbol,TAMQPField}
+
+    TAMQPHeaderPayload(p::TAMQPBodyPayload) = TAMQPHeaderPayload(p.data)
+    TAMQPHeaderPayload(b::Vector{TAMQPOctet}) = TAMQPHeaderPayload(IOBuffer(b))
+    function TAMQPHeaderPayload(io)
+        class = ntoh(read(io, TAMQPClassId))
+        wt = ntoh(read(io, UInt16))
+        @assert wt === ContentWeight
+        bodysize = ntoh(read(io, TAMQPContentBodySize))
+        propflags = TAMQPPropertyFlags(ntoh(read(io, UInt16)))
+    
+        for prop in SORTED_PROPERTIES
+            if (propflags & prop.mask) > 0x0000
+                proplist[prop.name] = read(io, prop.typ)
+            end
+        end
+        new(class, ContentWeight, bodysize, propflags, proplist)
+    end
+    function TAMQPHeaderPayload(class::TAMQPContentClass, message)
+        bodysize = length(message.data)
+        propflags = 0x0000
+        for name in keys(message.properties)
+            propflags = propflags & PROPERTIES[name].mask
+        end
+        new(class, ContentWeight, bodysize, TAMQPPropertyFlags(propflags), message.properties)
+    end
 end
 
 # Generic frame, used to read any frame
@@ -236,22 +263,50 @@ end
 immutable TAMQPContentHeaderFrame
     props::TAMQPFrameProperties
     hdrpayload::TAMQPHeaderPayload
+end
 
-    function TAMQPContentHeaderFrame(f::TAMQPGenericFrame)
-        @assert f.hdr == FrameHeader
-        new(f.props, TAMQPHeaderPayload(f.payload))
+function TAMQPContentHeaderFrame(f::TAMQPGenericFrame)
+    @logmsg("Frame Conversion: generic => contentheader")
+    @assert f.hdr == FrameHeader
+    TAMQPContentHeaderFrame(f.props, TAMQPHeaderPayload(f.payload))
+end
+
+function TAMQPGenericFrame(f::TAMQPContentHeaderFrame)
+    @logmsg("Frame Conversion contentheader => generic")
+    iob = IOBuffer()
+    hdrpayload = f.hdrpayload
+    propflags = hdrpayload.propflags
+
+    write(iob, hton(hdrpayload.class))
+    write(iob, hton(hdrpayload.weight))
+    write(iob, hton(hdrpayload.bodysize))
+    write(iob, hton(propflags.flags))
+
+    flags = propflags.flags
+    for prop in SORTED_PROPERTIES
+        if (flags & prop.mask) > 0x0000
+            write(io, proplist[prop.name])
+        end
     end
+    bodypayload = TAMQPBodyPayload(takebuf_array(iob))
+    TAMQPGenericFrame(FrameHeader, TAMQPFrameProperties(f.props.channel, length(bodypayload.data)), bodypayload, FrameEnd)
 end
 
 # Type = 3, "BODY": content body frame.
 immutable TAMQPContentBodyFrame
     props::TAMQPFrameProperties
     payload::TAMQPBodyPayload
+end
 
-    function TAMQPContentBodyFrame(f::TAMQPGenericFrame)
-        @assert f.hdr == FrameBody
-        new(f.props, f.payload)
-    end
+function TAMQPContentBodyFrame(f::TAMQPGenericFrame)
+    @logmsg("Frame Conversion: generic => contentbody")
+    @assert f.hdr == FrameBody
+    TAMQPContentBodyFrame(f.props, f.payload)
+end
+
+function TAMQPGenericFrame(f::TAMQPContentBodyFrame)
+    @logmsg("Frame Conversion contentbody => generic")
+    TAMQPGenericFrame(FrameBody, TAMQPFrameProperties(f.props.channel, length(f.payload.data)), f.payload, FrameEnd)
 end
 
 # Type = 4, "HEARTBEAT": heartbeat frame.

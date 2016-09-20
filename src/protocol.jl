@@ -216,14 +216,40 @@ isopen(c::MessageChannel) = isopen(c.conn) && (c.id in keys(c.conn.channels))
 get_property(c::MessageChannel, s::Symbol, default) = get_property(c.conn, s, default)
 get_property(c::Connection, s::Symbol, default) = get(c.properties, s, default)
 
-send(c::MessageChannel, f) = send(c.conn, f)
-function send(c::Connection, f)
+send(c::MessageChannel, f, msgframes::Vector=[]) = send(c.conn, f, msgframes)
+function send(c::Connection, f, msgframes::Vector=[])
     put!(c.sendq, TAMQPGenericFrame(f))
+    for m in msgframes
+        put!(c.sendq, TAMQPGenericFrame(m))
+    end
     nothing
 end
-function send(c::MessageChannel, payload::TAMQPMethodPayload)
-    @logmsg("sending $(method_name(payload))")
-    send(c, TAMQPMethodFrame(TAMQPFrameProperties(chan.id,0), payload))
+function send(c::MessageChannel, payload::TAMQPMethodPayload, msg::Nullable{Message}=Nullable{Message}())
+    logstrmsg = isnull(msg) ? "without" : "with"
+    @logmsg("sending $(method_name(payload)) $logstrmsg content")
+    frameprop = TAMQPFrameProperties(c.id,0)
+    if !isnull(msg)
+        msgframes = []
+        message = get(msg)
+
+        # send message header frame
+        hdrpayload = TAMQPHeaderPayload(payload.class, message)
+        push!(msgframes, TAMQPContentHeaderFrame(frameprop, hdrpayload))
+
+        # send one or more message body frames
+        offset = 1
+        msglen = length(message.data)
+        while offset < msglen
+            msgend = min(msglen, offset + c.conn.framemax - 1)
+            bodypayload = TAMQPBodyPayload(message.data[offset:msgend])
+            offset = msgend + 1
+            push!(msgframes, TAMQPContentBodyFrame(frameprop, bodypayload))
+        end
+
+        send(c, TAMQPMethodFrame(frameprop, payload), msgframes)
+    else
+        send(c, TAMQPMethodFrame(frameprop, payload))
+    end
 end
 
 # ----------------------------------------
@@ -257,6 +283,7 @@ function connection_processor(c, name, fn)
             @logmsg(reason)
         else
             reason = reason * " Unhandled exception: $err"
+            showerror(STDERR, err)
             @logmsg(reason)
             close(c, false, true)
             #rethrow(err)
@@ -265,8 +292,10 @@ function connection_processor(c, name, fn)
 end
 
 function connection_sender(c::Connection)
+    msg = take!(c.sendq)
     @logmsg("==> sending on conn $(c.virtualhost)")
-    write(sock(c), take!(c.sendq))
+    nbytes = write(sock(c), msg)
+    @logmsg("==> sent $nbytes bytes")
 
     # update heartbeat time for client
     c.heartbeat_time_client = time()
@@ -691,8 +720,8 @@ function basic_cancel(chan::MessageChannel, consumer_tag::String; nowait::Bool=f
     end
 end
 
-function basic_publish(chan::MessageChannel, exchange::String, routing_key::String; mandatory::Bool=false, immediate::Bool=false)
-    send_basic_publish(chan, exchange, routing_key, mandatory, immediate)
+function basic_publish(chan::MessageChannel, msg::Message; exchange::String="", routing_key::String="", mandatory::Bool=false, immediate::Bool=false)
+    send_basic_publish(chan, msg, exchange, routing_key, mandatory, immediate)
 end
 
 const GET_EMPTY_RESP = (false, TAMQPDeliveryTag(0), false, "", "", TAMQPMessageCount(0))
@@ -767,12 +796,13 @@ function _send_close(context_class::Symbol, chan::MessageChannel, reply_code=Rep
         @logmsg("closing channel 0 is equivalent to closing the connection!")
         context_class = :Connection
     end
+    context_chan_id = context_class === :Connection ? 0 : chan.id
 
-    _send_close(context_class, chan.conn, reply_code, reply_text, class_id, method_id, chan.id)
+    _send_close(context_class, context_chan_id, chan.conn, reply_code, reply_text, class_id, method_id, chan.id)
 end
 
-_send_close(context_class::Symbol, conn::Connection, reply_code=ReplySuccess, reply_text="", class_id=0, method_id=0, chan_id=0) =
-    send(conn, TAMQPMethodPayload(context_class, :Close, (TAMQPReplyCode(reply_code), TAMQPReplyText(reply_text), TAMQPClassId(class_id), TAMQPMethodId(method_id))))
+_send_close(context_class::Symbol, context_chan_id, conn::Connection, reply_code=ReplySuccess, reply_text="", class_id=0, method_id=0, chan_id=0) =
+    send(conn, TAMQPMethodFrame(TAMQPFrameProperties(context_chan_id,0), TAMQPMethodPayload(context_class, :Close, (TAMQPReplyCode(reply_code), TAMQPReplyText(reply_text), TAMQPClassId(class_id), TAMQPMethodId(method_id)))))
 
 send_connection_close_ok(chan::MessageChannel) = _send_close_ok(:Connection, chan)
 on_connection_close_ok(chan::MessageChannel, m::TAMQPMethodFrame, ctx) = _on_close_ok(:Connection, chan, m, ctx)
@@ -796,7 +826,7 @@ function on_channel_close(chan::MessageChannel, m::TAMQPMethodFrame, ctx)
 end
 
 send_connection_close(chan::MessageChannel, reply_code=ReplySuccess, reply_text="", class_id=0, method_id=0) = _send_close(:Connection, chan, reply_code, reply_text, class_id, method_id)
-send_connection_close(conn::Connection, reply_code=ReplySuccess, reply_text="", class_id=0, method_id=0) = _send_close(:Connection, conn, reply_code, reply_text, class_id, method_id)
+send_connection_close(conn::Connection, reply_code=ReplySuccess, reply_text="", class_id=0, method_id=0) = _send_close(:Connection, 0, conn, reply_code, reply_text, class_id, method_id)
 
 send_channel_close_ok(chan::MessageChannel) = _send_close_ok(:Channel, chan)
 on_channel_close_ok(chan::MessageChannel, m::TAMQPMethodFrame, ctx) = _on_close_ok(:Channel, chan, m, ctx)
@@ -1003,7 +1033,8 @@ send_basic_consume(chan::MessageChannel, queue::String, consumer_tag::String, no
     send(chan, TAMQPMethodPayload(:Basic, :Consume, (0, queue, consumer_tag, no_local, no_ack, exclusive, nowait, arguments)))
 
 send_basic_cancel(chan::MessageChannel, consumer_tag::String, nowait::Bool) = send(chan, TAMQPMethodPayload(:Basic, :Cancel, (consumer_tag, nowait)))
-send_basic_publish(chan::MessageChannel, exchange::String, routing_key::String, mandatory::Bool=false, immediate::Bool=false) = send(chan, TAMQPMethodPayload(:Basic, :Publish, (0, exchange, routing_key, mandatory, immediate)))
+send_basic_publish(chan::MessageChannel, msg::Message, exchange::String, routing_key::String, mandatory::Bool=false, immediate::Bool=false) =
+    send(chan, TAMQPMethodPayload(:Basic, :Publish, (0, exchange, routing_key, mandatory, immediate)), Nullable(msg))
 send_basic_ack(chan::MessageChannel, delivery_tag::TAMQPDeliveryTag, all_upto::Bool) = send(chan, TAMQPMethodPayload(:Basic, :Ack, (delivery_tag, all_upto)))
 send_basic_reject(chan::MessageChannel, delivery_tag::TAMQPDeliveryTag, requeue::Bool) = send(chan, TAMQPMethodPayload(:Basic, :Reject, (delivery_tag, requeue)))
 send_basic_recover(chan::MessageChannel, requeue::Bool, async::Bool) = send(chan, TAMQPMethodPayload(:Basic, async ? :RecoverAsync : :Recover, (requeue,)))
