@@ -4,7 +4,7 @@ const ProtocolVersion = UInt8[0, 9, 1]
 
 const ProtocolHeader = vcat(LiteralAMQP, ProtocolId, ProtocolVersion)
 
-const ContentWeight = 0x00
+const ContentWeight = 0x0000
 const FrameEnd = 0xCE
 const HeartBeat = UInt8[8, 0, 0, FrameEnd]
 
@@ -30,7 +30,7 @@ immutable TAMQPBit
 end
 
 function TAMQPBit(b::TAMQPBit, pos::Int)
-    TAMQPBit((b >> (pos-1)) & 0x1)
+    TAMQPBit((b.val >> (pos-1)) & 0x1)
 end
 
 function TAMQPBit(b::TAMQPBit, setbit::TAMQPBit, pos::Int)
@@ -187,9 +187,11 @@ immutable TAMQPHeaderPayload
         @assert wt === ContentWeight
         bodysize = ntoh(read(io, TAMQPContentBodySize))
         propflags = TAMQPPropertyFlags(ntoh(read(io, UInt16)))
-    
+        proplist = Dict{Symbol,TAMQPField}()
+   
+        flags = propflags.flags 
         for prop in SORTED_PROPERTIES
-            if (propflags & prop.mask) > 0x0000
+            if (flags & prop.mask) > 0x0000
                 proplist[prop.name] = read(io, prop.typ)
             end
         end
@@ -197,11 +199,11 @@ immutable TAMQPHeaderPayload
     end
     function TAMQPHeaderPayload(class::TAMQPContentClass, message)
         bodysize = length(message.data)
-        propflags = 0x0000
+        flags = 0x0000
         for name in keys(message.properties)
-            propflags = propflags & PROPERTIES[name].mask
+            flags = flags & PROPERTIES[name].mask
         end
-        new(class, ContentWeight, bodysize, TAMQPPropertyFlags(propflags), message.properties)
+        new(class, ContentWeight, bodysize, TAMQPPropertyFlags(flags), message.properties)
     end
 end
 
@@ -276,6 +278,7 @@ function TAMQPGenericFrame(f::TAMQPContentHeaderFrame)
     iob = IOBuffer()
     hdrpayload = f.hdrpayload
     propflags = hdrpayload.propflags
+    proplist = hdrpayload.proplist
 
     write(iob, hton(hdrpayload.class))
     write(iob, hton(hdrpayload.weight))

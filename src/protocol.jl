@@ -198,12 +198,15 @@ type MessageChannel <: AbstractChannel
     receiver::Nullable{Task}
     callbacks::Dict{Tuple,Tuple{Function,Any}}
 
+    partial_msgs::Vector{Message} # holds partial messages while they are getting read (message bodies arrive in sequence)
+    chan_get::Channel{Nullable{Message}}  # channel used for received messages, in sync get call (TODO: maybe type more strongly?)
+
     closereason::Nullable{CloseReason}
 
     function MessageChannel(id, conn)
         new(id, conn, CONN_STATE_CLOSED, true,
             Channel{TAMQPGenericFrame}(CONN_MAX_QUEUED), nothing, Dict{Tuple,Tuple{Function,Any}}(),
-            nothing)
+            Message[], Channel{Nullable{Message}}(1), nothing)
     end
 end
 
@@ -346,6 +349,14 @@ function channel_receiver(c::MessageChannel)
         m = TAMQPHeartBeatFrame(f)
         @logmsg("<== channel: $(f.props.channel), heartbeat")
         cbkey = (f.hdr,)
+    elseif f.hdr == FrameHeader
+        m = TAMQPContentHeaderFrame(f)
+        @logmsg("<== channel: $(f.props.channel), contentheader")
+        cbkey = (f.hdr,)
+    elseif f.hdr == FrameBody
+        m = TAMQPContentBodyFrame(f)
+        @logmsg("<== channel: $(f.props.channel), contentbody")
+        cbkey = (f.hdr,)
     else
         m = f
         @logmsg("<== channel: $(f.props.channel), unhandled frame type $(f.hdr)")
@@ -478,6 +489,7 @@ function close(chan::MessageChannel, handshake::Bool=false, by_peer::Bool=false,
     # release resources when closed by peer or when closing abruptly
     if !handshake || by_peer
         close(chan.recvq)
+        close(chan.chan_get)
         chan.receiver = nothing
         chan.callbacks = Dict{Tuple,Tuple{Function,Any}}()
         delete!(chan.conn.channels, chan.id)
@@ -714,35 +726,30 @@ function basic_consume(chan::MessageChannel, queue::String; consumer_tag::String
     end
 end
 
+"""Cancels a consumer.
+
+This does not affect already delivered messages, but it does mean the server will not send any more messages for that consumer. The client may receive an arbitrary number of 
+messages in between sending the cancel method and receiving the cancel­ok reply. 
+"""
 function basic_cancel(chan::MessageChannel, consumer_tag::String; nowait::Bool=false, timeout::Int=10)
     _wait_resp(chan, (true, ""), nowait, on_basic_cancel_ok, :Basic, :CancelOk, (false, ""), timeout) do
         send_basic_cancel(chan, consumer_tag, nowait)
     end
 end
 
+"""Publish a message
+
+This method publishes a message to a specific exchange. The message will be routed to queues as defined by the exchange
+configuration and distributed to any active consumers when the transaction, if any, is committed.
+"""
 function basic_publish(chan::MessageChannel, msg::Message; exchange::String="", routing_key::String="", mandatory::Bool=false, immediate::Bool=false)
     send_basic_publish(chan, msg, exchange, routing_key, mandatory, immediate)
 end
 
-const GET_EMPTY_RESP = (false, TAMQPDeliveryTag(0), false, "", "", TAMQPMessageCount(0))
+const GET_EMPTY_RESP = Nullable{Message}()
 function basic_get(chan::MessageChannel, queue::String, noack::Bool)
-    result = GET_EMPTY_RESP
-    reply = Channel{typeof(GET_EMPTY_RESP)}(1)
-
-    # register callbacks
-    # TODO: it may make sense to have this callback registered always for efficiency
-    handle(chan, :Basic, :GetOk, on_basic_get_empty_or_ok, reply)
-    handle(chan, :Basic, :GetEmpty, on_basic_get_empty_or_ok, reply)
-
     send_basic_get(chan, queue, noack)
-
-    # wait for response
-    result = take!(reply)
-    handle(chan, :Basic, :GetOk)
-    handle(chan, :Basic, :GetEmpty)
-    close(reply)
-
-    result
+    take!(chan.chan_get)
 end
 
 basic_ack(chan::MessageChannel, delivery_tag::TAMQPDeliveryTag; all_upto::Bool=false) = send_basic_ack(chan, delivery_tag, all_upto)
@@ -904,7 +911,7 @@ function on_connection_tune(chan::MessageChannel, m::TAMQPMethodFrame, ctx)
     conn.heartbeat = m.payload.fields[3].second
     handle(chan, FrameHeartbeat, on_connection_heartbeat)
     send_connection_tune_ok(chan, ctx[:channelmax], ctx[:framemax], ctx[:heartbeat])
-    handle(chan, :Connection, :TuneOk)
+    handle(chan, :Connection, :Tune)
     handle(chan, :Connection, :OpenOk, on_connection_open_ok, ctx)
     send_connection_open(chan)
     nothing
@@ -944,6 +951,7 @@ function on_connection_open_ok(chan::MessageChannel, m::TAMQPMethodFrame, ctx)
 
     handle(chan, :Connection, :Close, on_connection_close, ctx)
     handle(chan, :Connection, :CloseOk, on_connection_close_ok, ctx)
+    handle(chan, :Connection, :OpenOk)
 
     nothing
 end
@@ -956,10 +964,14 @@ send_channel_flow(chan::MessageChannel, flow::Bool) = send(chan, TAMQPMethodPayl
 
 function on_channel_open_ok(chan::MessageChannel, m::TAMQPMethodFrame, ctx)
     chan.state = CONN_STATE_OPEN
-    handle(chan, :Channel, :Flow, on_channel_flow, :Flow)
-    handle(chan, :Channel, :FlowOk, on_channel_flow, :FlowOk)
-    handle(chan, :Channel, :Close, on_channel_close)
-    handle(chan, :Channel, :CloseOk, on_channel_close_ok)
+    handle(chan, :Channel, :Flow,       on_channel_flow, :Flow)
+    handle(chan, :Channel, :FlowOk,     on_channel_flow, :FlowOk)
+    handle(chan, :Channel, :Close,      on_channel_close)
+    handle(chan, :Channel, :CloseOk,    on_channel_close_ok)
+    handle(chan, :Basic,   :GetOk,      on_basic_get_empty_or_ok, chan.chan_get)
+    handle(chan, :Basic,   :GetEmpty,   on_basic_get_empty_or_ok, chan.chan_get)
+    handle(chan, FrameHeader, on_channel_message_in)
+    handle(chan, FrameBody, on_channel_message_in)
     nothing
 end
 
@@ -1035,6 +1047,7 @@ send_basic_consume(chan::MessageChannel, queue::String, consumer_tag::String, no
 send_basic_cancel(chan::MessageChannel, consumer_tag::String, nowait::Bool) = send(chan, TAMQPMethodPayload(:Basic, :Cancel, (consumer_tag, nowait)))
 send_basic_publish(chan::MessageChannel, msg::Message, exchange::String, routing_key::String, mandatory::Bool=false, immediate::Bool=false) =
     send(chan, TAMQPMethodPayload(:Basic, :Publish, (0, exchange, routing_key, mandatory, immediate)), Nullable(msg))
+send_basic_get(chan::MessageChannel, queue::String, noack::Bool) = send(chan, TAMQPMethodPayload(:Basic, :Get, (0, queue, noack)))
 send_basic_ack(chan::MessageChannel, delivery_tag::TAMQPDeliveryTag, all_upto::Bool) = send(chan, TAMQPMethodPayload(:Basic, :Ack, (delivery_tag, all_upto)))
 send_basic_reject(chan::MessageChannel, delivery_tag::TAMQPDeliveryTag, requeue::Bool) = send(chan, TAMQPMethodPayload(:Basic, :Reject, (delivery_tag, requeue)))
 send_basic_recover(chan::MessageChannel, requeue::Bool, async::Bool) = send(chan, TAMQPMethodPayload(:Basic, async ? :RecoverAsync : :Recover, (requeue,)))
@@ -1057,13 +1070,40 @@ function on_basic_get_empty_or_ok(chan::MessageChannel, m::TAMQPMethodFrame, ctx
     if is_method(m, :Basic, :GetEmpty)
         put!(ctx, GET_EMPTY_RESP)
     else
-        delivery_tag = m.payload.fields[1].second
-        redelivered = convert(Bool, m.payload.fields[2].second)
-        exchange = convert(String, m.payload.fields[3].second)
-        routing_key = convert(String, m.payload.fields[4].second)
-        message_count = m.payload.fields[5].second
-        put!(ctx, (true, delivery_tag, redelivered, exchange, routing_key, message_count))
+        msg = Message(UInt8[])
+        msg.delivery_tag = m.payload.fields[1].second
+        msg.redelivered = convert(Bool, m.payload.fields[2].second)
+        msg.exchange = convert(String, m.payload.fields[3].second)
+        msg.routing_key = convert(String, m.payload.fields[4].second)
+        msg.remaining = m.payload.fields[5].second
+
+        # wait for message header and body
+        push!(chan.partial_msgs, msg)
     end
+    nothing
+end
+
+function on_channel_message_in(chan::MessageChannel, m::TAMQPContentHeaderFrame, ctx)
+    msg = chan.partial_msgs[1]
+    msg.properties = m.hdrpayload.proplist
+    msg.data = Array(UInt8, m.hdrpayload.bodysize)
+    msg.filled = 0
+    nothing
+end
+
+function on_channel_message_in(chan::MessageChannel, m::TAMQPContentBodyFrame, ctx)
+    msg = chan.partial_msgs[1]
+    data = m.payload.data
+    startpos = msg.filled + 1
+    endpos = min(length(msg.data), msg.filled + length(data))
+    msg.data[startpos:endpos] = data
+    msg.filled = endpos
+
+    if msg.filled >= length(msg.data)
+        # got all data for msg
+        put!(chan.chan_get, Nullable(shift!(chan.partial_msgs)))
+    end
+
     nothing
 end
 

@@ -30,10 +30,18 @@ const SORTED_PROPERTIES = [PROPERTIES[k] for k in SORTED_PROPERTY_NAMES]
 type Message
     data::Vector{UInt8}
     properties::Dict{Symbol,TAMQPField}
+
+    filled::Int
+
+    delivery_tag::TAMQPDeliveryTag
+    redelivered::Bool
+    exchange::String
+    routing_key::String
+    remaining::TAMQPMessageCount
 end
 
 function Message(data::Vector{UInt8}; kwargs...)
-    msg = Message(data, Dict{Symbol,TAMQPField}())
+    msg = Message(data, Dict{Symbol,TAMQPField}(), length(data), TAMQPDeliveryTag(0), false, "", "", TAMQPMessageCount(0))
     set_properties(msg; kwargs...)
     msg
 end
