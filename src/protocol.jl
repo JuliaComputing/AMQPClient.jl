@@ -1,3 +1,7 @@
+# default client timeout to use with blocking methods after which they throw an error
+const DEFAULT_TIMEOUT = typemax(Int)
+const DEFAULT_CONNECT_TIMEOUT = typemax(Int)
+
 # ----------------------------------------
 # IO for types begin
 # ----------------------------------------
@@ -437,7 +441,7 @@ end
 channel(c::MessageChannel, id::Integer) = channel(c.conn, id)
 channel(c::Connection, id::Integer) = c.channels[id]
 channel(c::MessageChannel, id::Integer, create::Bool) = channel(c.conn, id, create)
-function channel(c::Connection, id::Integer, create::Bool; connect_timeout=5)
+function channel(c::Connection, id::Integer, create::Bool; connect_timeout=DEFAULT_CONNECT_TIMEOUT)
     if create
         if id == UNUSED_CHANNEL
             id = find_unused_channel(c)
@@ -464,7 +468,7 @@ function channel(c::Connection, id::Integer, create::Bool; connect_timeout=5)
     chan
 end
 
-function connection(;virtualhost="/", host="localhost", port=AMQP_DEFAULT_PORT, auth_params=DEFAULT_AUTH_PARAMS, channelmax=DEFAULT_CHANNELMAX, framemax=0, heartbeat=0, connect_timeout=5)
+function connection(;virtualhost="/", host="localhost", port=AMQP_DEFAULT_PORT, auth_params=DEFAULT_AUTH_PARAMS, channelmax=DEFAULT_CHANNELMAX, framemax=0, heartbeat=0, connect_timeout=DEFAULT_CONNECT_TIMEOUT)
     @logmsg("connecting to $(host):$(port)$(virtualhost)")
     conn = Connection(virtualhost, host, port)
     chan = channel(conn, DEFAULT_CHANNEL, true)
@@ -599,7 +603,7 @@ default_exchange_name() = ""
 
 function _wait_resp{T}(sendmethod, chan::MessageChannel, default_result::T, 
         nowait::Bool=true, resp_handler=nothing, resp_class=nothing, resp_meth=nothing,
-        timeout_result::T=default_result, timeout::Int=10)
+        timeout_result::T=default_result, timeout::Int=DEFAULT_TIMEOUT)
     result = default_result
     if !nowait
         reply = Channel{T}(1)
@@ -621,7 +625,7 @@ end
 
 function exchange_declare(chan::MessageChannel, name::String, typ::String;
         passive::Bool=false, durable::Bool=false, auto_delete::Bool=false,
-        nowait::Bool=false, timeout::Int=10,
+        nowait::Bool=false, timeout::Int=DEFAULT_TIMEOUT,
         arguments::Dict{String,Any}=Dict{String,Any}())
     (isempty(name) || startswith(name, "amq.")) && !passive && throw(AMQPClientException("Exchange name '$name' is reserved. Use a different name."))
     if auto_delete
@@ -633,7 +637,7 @@ function exchange_declare(chan::MessageChannel, name::String, typ::String;
     end
 end
 
-function exchange_delete(chan::MessageChannel, name::String; if_unused::Bool=false, nowait::Bool=false, timeout::Int=10)
+function exchange_delete(chan::MessageChannel, name::String; if_unused::Bool=false, nowait::Bool=false, timeout::Int=DEFAULT_TIMEOUT)
     (isempty(name) || startswith(name, "amq.")) && throw(AMQPClientException("Exchange name '$name' is reserved. Use a different name."))
     _wait_resp(chan, true, nowait, on_exchange_delete_ok, :Exchange, :DeleteOk, false, timeout) do
         send_exchange_delete(chan, name, if_unused, nowait)
@@ -641,7 +645,7 @@ function exchange_delete(chan::MessageChannel, name::String; if_unused::Bool=fal
 end
 
 function exchange_bind(chan::MessageChannel, dest::String, src::String, routing_key::String;
-        nowait::Bool=false, timeout::Int=10,
+        nowait::Bool=false, timeout::Int=DEFAULT_TIMEOUT,
         arguments::Dict{String,Any}=Dict{String,Any}())
     _wait_resp(chan, true, nowait, on_exchange_bind_ok, :Exchange, :BindOk, false, timeout) do
         send_exchange_bind(chan, dest, src, routing_key, nowait, arguments)
@@ -649,7 +653,7 @@ function exchange_bind(chan::MessageChannel, dest::String, src::String, routing_
 end
 
 function exchange_unbind(chan::MessageChannel, dest::String, src::String, routing_key::String;
-        nowait::Bool=false, timeout::Int=10,
+        nowait::Bool=false, timeout::Int=DEFAULT_TIMEOUT,
         arguments::Dict{String,Any}=Dict{String,Any}())
     _wait_resp(chan, true, nowait, on_exchange_unbind_ok, :Exchange, :UnbindOk, false, timeout) do
         send_exchange_unbind(chan, dest, src, routing_key, nowait, arguments)
@@ -668,20 +672,20 @@ Returns a tuple: (boolean success/failure, queue name, message count, consumer c
 """
 function queue_declare(chan::MessageChannel, name::String;
         passive::Bool=false, durable::Bool=false, exclusive::Bool=false, auto_delete::Bool=false,
-        nowait::Bool=false, timeout::Int=10,
+        nowait::Bool=false, timeout::Int=DEFAULT_TIMEOUT,
         arguments::Dict{String,Any}=Dict{String,Any}())
     _wait_resp(chan, (true, name, TAMQPMessageCount(0), Int32(0)), nowait, on_queue_declare_ok, :Queue, :DeclareOk, (false, name, TAMQPMessageCount(0), Int32(0)), timeout) do
         send_queue_declare(chan, name, passive, durable, exclusive, auto_delete, nowait, arguments)
     end
 end
 
-function queue_bind(chan::MessageChannel, queue_name::String, excg_name::String, routing_key::String; nowait::Bool=false, timeout::Int=10, arguments::Dict{String,Any}=Dict{String,Any}())
+function queue_bind(chan::MessageChannel, queue_name::String, excg_name::String, routing_key::String; nowait::Bool=false, timeout::Int=DEFAULT_TIMEOUT, arguments::Dict{String,Any}=Dict{String,Any}())
     _wait_resp(chan, true, nowait, on_queue_bind_ok, :Queue, :BindOk, false, timeout) do
         send_queue_bind(chan, queue_name, excg_name, routing_key, nowait, arguments)
     end
 end
 
-function queue_unbind(chan::MessageChannel, queue_name::String, excg_name::String, routing_key::String; arguments::Dict{String,Any}=Dict{String,Any}(), timeout::Int=10)
+function queue_unbind(chan::MessageChannel, queue_name::String, excg_name::String, routing_key::String; arguments::Dict{String,Any}=Dict{String,Any}(), timeout::Int=DEFAULT_TIMEOUT)
     nowait = false
     _wait_resp(chan, true, nowait, on_queue_unbind_ok, :Queue, :UnbindOk, false, timeout) do
         send_queue_unbind(chan, queue_name, excg_name, routing_key, arguments)
@@ -691,7 +695,7 @@ end
 """Purge messages from a queue.
 Returns a tuple: (boolean success/failure, message count)
 """
-function queue_purge(chan::MessageChannel, name::String; nowait::Bool=false, timeout::Int=10)
+function queue_purge(chan::MessageChannel, name::String; nowait::Bool=false, timeout::Int=DEFAULT_TIMEOUT)
     _wait_resp(chan, (true,TAMQPMessageCount(0)), nowait, on_queue_purge_ok, :Queue, :PurgeOk, (false,TAMQPMessageCount(0)), timeout) do
         send_queue_purge(chan, name, nowait)
     end
@@ -700,7 +704,7 @@ end
 """Delete a queue.
 Returns a tuple: (boolean success/failure, message count)
 """
-function queue_delete(chan::MessageChannel, name::String; if_unused::Bool=false, if_empty::Bool=false, nowait::Bool=false, timeout::Int=10)
+function queue_delete(chan::MessageChannel, name::String; if_unused::Bool=false, if_empty::Bool=false, nowait::Bool=false, timeout::Int=DEFAULT_TIMEOUT)
     _wait_resp(chan, (true,TAMQPMessageCount(0)), nowait, on_queue_delete_ok, :Queue, :DeleteOk, (false,TAMQPMessageCount(0)), timeout) do
         send_queue_delete(chan, name, if_unused, if_empty, nowait)
     end
@@ -721,9 +725,9 @@ function _tx(sendmethod, chan::MessageChannel, respmethod::Symbol, on_resp, time
     end
 end
 
-tx_select(chan::MessageChannel; timeout::Int=10) = _tx(send_tx_select, chan, :SelectOk, on_tx_select_ok, timeout)
-tx_commit(chan::MessageChannel; timeout::Int=10) = _tx(send_tx_commit, chan, :CommitOk, on_tx_commit_ok, timeout)
-tx_rollback(chan::MessageChannel; timeout::Int=10) = _tx(send_tx_rollback, chan, :RollbackOk, on_tx_rollback_ok, timeout)
+tx_select(chan::MessageChannel; timeout::Int=DEFAULT_TIMEOUT) = _tx(send_tx_select, chan, :SelectOk, on_tx_select_ok, timeout)
+tx_commit(chan::MessageChannel; timeout::Int=DEFAULT_TIMEOUT) = _tx(send_tx_commit, chan, :CommitOk, on_tx_commit_ok, timeout)
+tx_rollback(chan::MessageChannel; timeout::Int=DEFAULT_TIMEOUT) = _tx(send_tx_rollback, chan, :RollbackOk, on_tx_rollback_ok, timeout)
 
 # ----------------------------------------
 # Tx end
@@ -733,7 +737,7 @@ tx_rollback(chan::MessageChannel; timeout::Int=10) = _tx(send_tx_rollback, chan,
 # Basic begin
 # ----------------------------------------
 
-function basic_qos(chan::MessageChannel, prefetch_size, prefetch_count, apply_global::Bool; timeout::Int=10)
+function basic_qos(chan::MessageChannel, prefetch_size, prefetch_count, apply_global::Bool; timeout::Int=DEFAULT_TIMEOUT)
     nowait = false
     _wait_resp(chan, true, nowait, on_basic_qos_ok, :Basic, :QosOk, false, timeout) do
         send_basic_qos(chan, prefetch_size, prefetch_count, apply_global)
@@ -750,7 +754,7 @@ exclusive: request exclusive access (only this consumer can access the queue)
 nowait: do not send a reply method
 """
 function basic_consume(chan::MessageChannel, queue::String, consumer_fn::Function; consumer_tag::String="", no_local::Bool=false, no_ack::Bool=false,
-    exclusive::Bool=false, nowait::Bool=false, arguments::Dict{String,Any}=Dict{String,Any}(), timeout::Int=10, buffer_sz::Int=typemax(Int))
+    exclusive::Bool=false, nowait::Bool=false, arguments::Dict{String,Any}=Dict{String,Any}(), timeout::Int=DEFAULT_TIMEOUT, buffer_sz::Int=typemax(Int))
     result = _wait_resp(chan, (true, ""), nowait, on_basic_consume_ok, :Basic, :ConsumeOk, (false, ""), timeout) do
         send_basic_consume(chan, queue, consumer_tag, no_local, no_ack, exclusive, nowait, arguments)
     end
@@ -768,7 +772,7 @@ end
 This does not affect already delivered messages, but it does mean the server will not send any more messages for that consumer. The client may receive an arbitrary number of 
 messages in between sending the cancel method and receiving the cancel­ok reply. 
 """
-function basic_cancel(chan::MessageChannel, consumer_tag::String; nowait::Bool=false, timeout::Int=10)
+function basic_cancel(chan::MessageChannel, consumer_tag::String; nowait::Bool=false, timeout::Int=DEFAULT_TIMEOUT)
     result = _wait_resp(chan, (true, ""), nowait, on_basic_cancel_ok, :Basic, :CancelOk, (false, ""), timeout) do
         send_basic_cancel(chan, consumer_tag, nowait)
     end
@@ -801,7 +805,7 @@ end
 basic_ack(chan::MessageChannel, delivery_tag::TAMQPDeliveryTag; all_upto::Bool=false) = send_basic_ack(chan, delivery_tag, all_upto)
 basic_reject(chan::MessageChannel, delivery_tag::TAMQPDeliveryTag; requeue::Bool=false) = send_basic_reject(chan, delivery_tag, requeue)
 
-function basic_recover(chan::MessageChannel, requeue::Bool=false; async::Bool=false, timeout::Int=10)
+function basic_recover(chan::MessageChannel, requeue::Bool=false; async::Bool=false, timeout::Int=DEFAULT_TIMEOUT)
     _wait_resp(chan, true, async, on_basic_recover_ok, :Basic, :RecoverOk, false, timeout) do
         send_basic_recover(chan, requeue, async)
     end
@@ -816,7 +820,7 @@ end
 # Confirm begin
 # ----------------------------------------
 
-function confirm_select(chan::MessageChannel; nowait::Bool=false, timeout::Int=10)
+function confirm_select(chan::MessageChannel; nowait::Bool=false, timeout::Int=DEFAULT_TIMEOUT)
     _wait_resp(chan, true, nowait, on_confirm_select_ok, :Confirm, :SelectOk, false, timeout) do
         send_confirm_select(chan, nowait)
     end
