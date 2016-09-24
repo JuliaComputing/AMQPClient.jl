@@ -33,6 +33,7 @@ type Message
 
     filled::Int
 
+    consumer_tag::String
     delivery_tag::TAMQPDeliveryTag
     redelivered::Bool
     exchange::String
@@ -41,7 +42,7 @@ type Message
 end
 
 function Message(data::Vector{UInt8}; kwargs...)
-    msg = Message(data, Dict{Symbol,TAMQPField}(), length(data), TAMQPDeliveryTag(0), false, "", "", TAMQPMessageCount(0))
+    msg = Message(data, Dict{Symbol,TAMQPField}(), length(data), "", TAMQPDeliveryTag(0), false, "", "", TAMQPMessageCount(0))
     set_properties(msg; kwargs...)
     msg
 end

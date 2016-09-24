@@ -2,11 +2,11 @@
 # IO for types begin
 # ----------------------------------------
 function read(io::IO, ::Type{TAMQPBit})
-    TAMQPBit(read(io, UInt8))
+    TAMQPBit(ntoh(read(io, UInt8)))
 end
 
 function write(io::IO, b::TAMQPBit)
-    write(io, b.val)
+    write(io, hton(b.val))
 end
 
 function read(io::IO, ::Type{TAMQPFrameProperties})
@@ -188,6 +188,22 @@ type Connection
     end
 end
 
+type MessageConsumer
+    chan_id::TAMQPChannel
+    consumer_tag::String
+    recvq::Channel{Message}
+    callback::Function
+    receiver::Task
+
+    function MessageConsumer(chan_id::TAMQPChannel, consumer_tag::String, callback::Function; buffer_size::Int=typemax(Int))
+        c = new(chan_id, consumer_tag, Channel{Message}(buffer_size), callback)
+        c.receiver = @async connection_processor(c, "Consumer $consumer_tag", channel_message_consumer)
+        c
+    end
+end
+
+close(consumer::MessageConsumer) = close(consumer.recvq)
+
 type MessageChannel <: AbstractChannel
     id::TAMQPChannel
     conn::Connection
@@ -200,13 +216,15 @@ type MessageChannel <: AbstractChannel
 
     partial_msgs::Vector{Message} # holds partial messages while they are getting read (message bodies arrive in sequence)
     chan_get::Channel{Nullable{Message}}  # channel used for received messages, in sync get call (TODO: maybe type more strongly?)
+    consumers::Dict{String,MessageConsumer}
 
     closereason::Nullable{CloseReason}
 
     function MessageChannel(id, conn)
         new(id, conn, CONN_STATE_CLOSED, true,
             Channel{TAMQPGenericFrame}(CONN_MAX_QUEUED), nothing, Dict{Tuple,Tuple{Function,Any}}(),
-            Message[], Channel{Nullable{Message}}(1), nothing)
+            Message[], Channel{Nullable{Message}}(1), Dict{String,MessageConsumer}(),
+            nothing)
     end
 end
 
@@ -275,21 +293,25 @@ function connection_processor(c, name, fn)
         end
     catch err
         reason = "$name task exiting."
-        isconnclosed = !isopen(c)
-        ischanclosed = isa(c, MessageChannel) && isa(err, InvalidStateException) && err.state == :closed
-        if ischanclosed || isconnclosed
-            reason = reason * " Connection closed"
-            if c.state !== CONN_STATE_CLOSING
-                reason = reason * " by peer"
-                close(c, false, true)
-            end
-            @logmsg(reason)
+        if isa(c, MessageConsumer)
+            close(c)
         else
-            reason = reason * " Unhandled exception: $err"
-            showerror(STDERR, err)
-            @logmsg(reason)
-            close(c, false, true)
-            #rethrow(err)
+            isconnclosed = !isopen(c)
+            ischanclosed = isa(c, MessageChannel) && isa(err, InvalidStateException) && err.state == :closed
+            if ischanclosed || isconnclosed
+                reason = reason * " Connection closed"
+                if c.state !== CONN_STATE_CLOSING
+                    reason = reason * " by peer"
+                    close(c, false, true)
+                end
+                @logmsg(reason)
+            else
+                reason = reason * " Unhandled exception: $err"
+                showerror(STDERR, err)
+                @logmsg(reason)
+                close(c, false, true)
+                #rethrow(err)
+            end
         end
     end
 end
@@ -365,6 +387,12 @@ function channel_receiver(c::MessageChannel)
     (cb,ctx) = get(c.callbacks, cbkey, (on_unexpected_message, nothing))
     @assert f.props.channel == c.id
     cb(c, m, ctx)
+    nothing
+end
+
+function channel_message_consumer(c::MessageConsumer)
+    m = take!(c.recvq)
+    c.callback(m)
     nothing
 end
 
@@ -490,6 +518,8 @@ function close(chan::MessageChannel, handshake::Bool=false, by_peer::Bool=false,
     if !handshake || by_peer
         close(chan.recvq)
         close(chan.chan_get)
+        map(close, values(chan.consumers))
+        empty!(chan.consumers)
         chan.receiver = nothing
         chan.callbacks = Dict{Tuple,Tuple{Function,Any}}()
         delete!(chan.conn.channels, chan.id)
@@ -719,11 +749,18 @@ no_ack: no acknowledgment needed, server automatically and silently acknowledges
 exclusive: request exclusive access (only this consumer can access the queue)
 nowait: do not send a reply method
 """
-function basic_consume(chan::MessageChannel, queue::String; consumer_tag::String="", no_local::Bool=false, no_ack::Bool=false,
-    exclusive::Bool=false, nowait::Bool=false, arguments::Dict{String,Any}=Dict{String,Any}(), timeout::Int=10)
-    _wait_resp(chan, (true, ""), nowait, on_basic_consume_ok, :Basic, :ConsumeOk, (false, ""), timeout) do
+function basic_consume(chan::MessageChannel, queue::String, consumer_fn::Function; consumer_tag::String="", no_local::Bool=false, no_ack::Bool=false,
+    exclusive::Bool=false, nowait::Bool=false, arguments::Dict{String,Any}=Dict{String,Any}(), timeout::Int=10, buffer_sz::Int=typemax(Int))
+    result = _wait_resp(chan, (true, ""), nowait, on_basic_consume_ok, :Basic, :ConsumeOk, (false, ""), timeout) do
         send_basic_consume(chan, queue, consumer_tag, no_local, no_ack, exclusive, nowait, arguments)
     end
+
+    # setup a message consumer
+    if result[1]
+        consumer_tag = result[2]
+        chan.consumers[consumer_tag] = MessageConsumer(chan.id, consumer_tag, consumer_fn; buffer_size=buffer_sz)
+    end
+    result
 end
 
 """Cancels a consumer.
@@ -732,9 +769,18 @@ This does not affect already delivered messages, but it does mean the server wil
 messages in between sending the cancel method and receiving the cancel­ok reply. 
 """
 function basic_cancel(chan::MessageChannel, consumer_tag::String; nowait::Bool=false, timeout::Int=10)
-    _wait_resp(chan, (true, ""), nowait, on_basic_cancel_ok, :Basic, :CancelOk, (false, ""), timeout) do
+    result = _wait_resp(chan, (true, ""), nowait, on_basic_cancel_ok, :Basic, :CancelOk, (false, ""), timeout) do
         send_basic_cancel(chan, consumer_tag, nowait)
     end
+
+    # clear a message consumer
+    if result[1]
+        if consumer_tag in keys(chan.consumers)
+            close(chan.consumers[consumer_tag])
+            delete!(chan.consumers, consumer_tag)
+        end
+    end
+    result
 end
 
 """Publish a message
@@ -747,8 +793,8 @@ function basic_publish(chan::MessageChannel, msg::Message; exchange::String="", 
 end
 
 const GET_EMPTY_RESP = Nullable{Message}()
-function basic_get(chan::MessageChannel, queue::String, noack::Bool)
-    send_basic_get(chan, queue, noack)
+function basic_get(chan::MessageChannel, queue::String, no_ack::Bool)
+    send_basic_get(chan, queue, no_ack)
     take!(chan.chan_get)
 end
 
@@ -764,6 +810,20 @@ end
 
 # ----------------------------------------
 # Basic end
+# ----------------------------------------
+
+# ----------------------------------------
+# Confirm begin
+# ----------------------------------------
+
+function confirm_select(chan::MessageChannel; nowait::Bool=false, timeout::Int=10)
+    _wait_resp(chan, true, nowait, on_confirm_select_ok, :Confirm, :SelectOk, false, timeout) do
+        send_confirm_select(chan, nowait)
+    end
+end
+
+# ----------------------------------------
+# Confirm end
 # ----------------------------------------
 
 # ----------------------------------------
@@ -968,8 +1028,9 @@ function on_channel_open_ok(chan::MessageChannel, m::TAMQPMethodFrame, ctx)
     handle(chan, :Channel, :FlowOk,     on_channel_flow, :FlowOk)
     handle(chan, :Channel, :Close,      on_channel_close)
     handle(chan, :Channel, :CloseOk,    on_channel_close_ok)
-    handle(chan, :Basic,   :GetOk,      on_basic_get_empty_or_ok, chan.chan_get)
-    handle(chan, :Basic,   :GetEmpty,   on_basic_get_empty_or_ok, chan.chan_get)
+    handle(chan, :Basic,   :GetOk,      on_basic_get_empty_or_ok)
+    handle(chan, :Basic,   :GetEmpty,   on_basic_get_empty_or_ok)
+    handle(chan, :Basic,   :Deliver,    on_basic_get_empty_or_ok)
     handle(chan, FrameHeader, on_channel_message_in)
     handle(chan, FrameBody, on_channel_message_in)
     nothing
@@ -1047,13 +1108,13 @@ send_basic_consume(chan::MessageChannel, queue::String, consumer_tag::String, no
 send_basic_cancel(chan::MessageChannel, consumer_tag::String, nowait::Bool) = send(chan, TAMQPMethodPayload(:Basic, :Cancel, (consumer_tag, nowait)))
 send_basic_publish(chan::MessageChannel, msg::Message, exchange::String, routing_key::String, mandatory::Bool=false, immediate::Bool=false) =
     send(chan, TAMQPMethodPayload(:Basic, :Publish, (0, exchange, routing_key, mandatory, immediate)), Nullable(msg))
-send_basic_get(chan::MessageChannel, queue::String, noack::Bool) = send(chan, TAMQPMethodPayload(:Basic, :Get, (0, queue, noack)))
+send_basic_get(chan::MessageChannel, queue::String, no_ack::Bool) = send(chan, TAMQPMethodPayload(:Basic, :Get, (0, queue, no_ack)))
 send_basic_ack(chan::MessageChannel, delivery_tag::TAMQPDeliveryTag, all_upto::Bool) = send(chan, TAMQPMethodPayload(:Basic, :Ack, (delivery_tag, all_upto)))
 send_basic_reject(chan::MessageChannel, delivery_tag::TAMQPDeliveryTag, requeue::Bool) = send(chan, TAMQPMethodPayload(:Basic, :Reject, (delivery_tag, requeue)))
 send_basic_recover(chan::MessageChannel, requeue::Bool, async::Bool) = send(chan, TAMQPMethodPayload(:Basic, async ? :RecoverAsync : :Recover, (requeue,)))
 
 on_basic_qos_ok(chan::MessageChannel, m::TAMQPMethodFrame, ctx) = _on_ack(chan, m, :Basic, :QosOk, ctx)
-function on_basic_consume_cancel_ok(method::Symbol, chan::MessageChannel, m::TAMQPMethodFrame, ctx)
+function _on_basic_consume_cancel_ok(method::Symbol, chan::MessageChannel, m::TAMQPMethodFrame, ctx)
     @assert is_method(m, :Basic, method)
     if ctx !== nothing
         consumer_tag = convert(String, m.payload.fields[1].second)
@@ -1068,14 +1129,23 @@ on_basic_recover_ok(chan::MessageChannel, m::TAMQPMethodFrame, ctx) = _on_ack(ch
 
 function on_basic_get_empty_or_ok(chan::MessageChannel, m::TAMQPMethodFrame, ctx)
     if is_method(m, :Basic, :GetEmpty)
-        put!(ctx, GET_EMPTY_RESP)
+        put!(chan.chan_get, GET_EMPTY_RESP)
     else
         msg = Message(UInt8[])
-        msg.delivery_tag = m.payload.fields[1].second
-        msg.redelivered = convert(Bool, m.payload.fields[2].second)
-        msg.exchange = convert(String, m.payload.fields[3].second)
-        msg.routing_key = convert(String, m.payload.fields[4].second)
-        msg.remaining = m.payload.fields[5].second
+        if is_method(m, :Basic, :Deliver)
+            msg.consumer_tag = m.payload.fields[1].second
+            msg.delivery_tag = m.payload.fields[2].second
+            msg.redelivered = convert(Bool, m.payload.fields[3].second)
+            msg.exchange = convert(String, m.payload.fields[4].second)
+            msg.routing_key = convert(String, m.payload.fields[5].second)
+        else
+            msg = Message(UInt8[])
+            msg.delivery_tag = m.payload.fields[1].second
+            msg.redelivered = convert(Bool, m.payload.fields[2].second)
+            msg.exchange = convert(String, m.payload.fields[3].second)
+            msg.routing_key = convert(String, m.payload.fields[4].second)
+            msg.remaining = m.payload.fields[5].second
+        end
 
         # wait for message header and body
         push!(chan.partial_msgs, msg)
@@ -1101,11 +1171,17 @@ function on_channel_message_in(chan::MessageChannel, m::TAMQPContentBodyFrame, c
 
     if msg.filled >= length(msg.data)
         # got all data for msg
-        put!(chan.chan_get, Nullable(shift!(chan.partial_msgs)))
+        if isempty(msg.consumer_tag)
+            put!(chan.chan_get, Nullable(shift!(chan.partial_msgs)))
+        else
+            put!(chan.consumers[msg.consumer_tag].recvq, shift!(chan.partial_msgs))
+        end
     end
 
     nothing
 end
+
+on_confirm_select_ok(chan::MessageChannel, m::TAMQPMethodFrame, ctx) = _on_ack(chan, m, :Confirm, :SelectOk, ctx)
 
 # ----------------------------------------
 # send and recv for methods end
