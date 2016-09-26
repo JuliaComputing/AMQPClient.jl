@@ -1,6 +1,7 @@
 # default client timeout to use with blocking methods after which they throw an error
-const DEFAULT_TIMEOUT = typemax(Int)
-const DEFAULT_CONNECT_TIMEOUT = typemax(Int)
+# Julia Timer converts seconds to milliseconds and adds 1 to it before passing it to libuv, hence the magic numbers to prevent overflow
+const DEFAULT_TIMEOUT = round(Int, typemax(Int)/1000) - 1
+const DEFAULT_CONNECT_TIMEOUT = round(Int, typemax(Int)/1000) - 1
 
 # ----------------------------------------
 # IO for types begin
@@ -299,6 +300,9 @@ function connection_processor(c, name, fn)
         reason = "$name task exiting."
         if isa(c, MessageConsumer)
             close(c)
+            reason = reason * " Unhandled exception: $err"
+            #showerror(STDERR, err)
+            @logmsg(reason)
         else
             isconnclosed = !isopen(c)
             ischanclosed = isa(c, MessageChannel) && isa(err, InvalidStateException) && err.state == :closed
@@ -311,7 +315,7 @@ function connection_processor(c, name, fn)
                 @logmsg(reason)
             else
                 reason = reason * " Unhandled exception: $err"
-                showerror(STDERR, err)
+                #showerror(STDERR, err)
                 @logmsg(reason)
                 close(c, false, true)
                 #rethrow(err)
@@ -784,7 +788,7 @@ function basic_cancel(chan::MessageChannel, consumer_tag::String; nowait::Bool=f
             delete!(chan.consumers, consumer_tag)
         end
     end
-    result
+    result[1]
 end
 
 """Publish a message

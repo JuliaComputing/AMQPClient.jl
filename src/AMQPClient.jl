@@ -5,16 +5,16 @@ using Base.I18n
 import Base: write, read, read!, close, convert, show, isopen
 
 # enable logging only during debugging
-using Logging
-#const logger = Logging.configure(filename="elly.log", level=DEBUG)
-const logger = Logging.configure(level=DEBUG)
-macro logmsg(s)
-    quote
-        debug("[", myid(), "-", "] ", $(esc(s)))
-    end
-end
+#using Logging
+#const logger = Logging.configure(filename="AMQPClient.log", level=DEBUG)
+#const logger = Logging.configure(level=DEBUG)
 #macro logmsg(s)
+#    quote
+#        debug("[", myid(), "-", "] ", $(esc(s)))
+#    end
 #end
+macro logmsg(s)
+end
 
 # Client property info that gets sent to the server on connection startup
 const CLIENT_IDENTIFICATION = Dict{String,Any}(
