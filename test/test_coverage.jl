@@ -116,7 +116,7 @@ function runtests(;virtualhost="/", host="localhost", port=AMQPClient.AMQP_DEFAU
     @test tx_commit(chan1)
     @test tx_rollback(chan1)
 
-    if conn.conn.heartbeat > 0
+    if 120 >= conn.conn.heartbeat > 0
         c = conn.conn
         testlog("testing heartbeats (waiting $(3*c.heartbeat) secs)...")
         ts1 = c.heartbeat_time_server
@@ -128,6 +128,8 @@ function runtests(;virtualhost="/", host="localhost", port=AMQPClient.AMQP_DEFAU
         end
         @test c.heartbeat_time_server > ts1
         @test c.heartbeat_time_client > tc1
+    else
+        testlog("not testing heartbeats (wait too long at $(3*conn.conn.heartbeat) secs)")
     end
 
     testlog("closing down...")
