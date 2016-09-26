@@ -502,7 +502,7 @@ end
 # Close channel / connection begin
 # ----------------------------------------
 
-function close(chan::MessageChannel, handshake::Bool=false, by_peer::Bool=false, reply_code=ReplySuccess, reply_text="", class_id=0, method_id=0)
+function close(chan::MessageChannel, handshake::Bool=true, by_peer::Bool=false, reply_code=ReplySuccess, reply_text="", class_id=0, method_id=0)
     (chan.state == CONN_STATE_CLOSED) && (return nothing)
 
     conn = chan.conn
@@ -532,7 +532,7 @@ function close(chan::MessageChannel, handshake::Bool=false, by_peer::Bool=false,
     nothing
 end
 
-function close(conn::Connection, handshake::Bool=false, by_peer::Bool=false, reply_code=ReplySuccess, reply_text="", class_id=0, method_id=0)
+function close(conn::Connection, handshake::Bool=true, by_peer::Bool=false, reply_code=ReplySuccess, reply_text="", class_id=0, method_id=0)
     (conn.state == CONN_STATE_CLOSED) && (return nothing)
 
     # send handshake if needed and when called the first time
