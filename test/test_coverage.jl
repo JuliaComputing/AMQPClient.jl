@@ -20,6 +20,10 @@ function runtests(;virtualhost="/", host="localhost", port=AMQPClient.AMQP_DEFAU
     chan1 = channel(conn, AMQPClient.UNUSED_CHANNEL, true)
     @test chan1.id == 1
 
+    # test default exchange names
+    @test default_exchange_name() == ""
+    @test default_exchange_name(EXCHANGE_TYPE_DIRECT) == "amq.direct"
+
     # create exchanges
     testlog("creating exchanges...")
     @test exchange_declare(chan1, EXCG_DIRECT, EXCHANGE_TYPE_DIRECT; arguments=Dict{String,Any}("Hello"=>"World", "Foo"=>"bar"))

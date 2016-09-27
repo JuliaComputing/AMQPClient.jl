@@ -107,12 +107,12 @@ write(io::IO, f::TAMQPGenericFrame) = write(io, hton(f.hdr), f.props, f.payload,
 """
 Given a generic frame, convert it to appropriate exact frame type.
 """
-function narrow_frame(f::TAMQPGenericFrame)
-    if f.hdr == FrameMethod
-        return TAMQPMethodFrame(f)
-    end
-    throw(AMQPProtocolException("Unknown frame type $(f.hdr)"))
-end
+#function narrow_frame(f::TAMQPGenericFrame)
+#    if f.hdr == FrameMethod
+#        return TAMQPMethodFrame(f)
+#    end
+#    throw(AMQPProtocolException("Unknown frame type $(f.hdr)"))
+#end
 
 function method_name(payload::TAMQPMethodPayload)
     c = CLASS_MAP[payload.class]
