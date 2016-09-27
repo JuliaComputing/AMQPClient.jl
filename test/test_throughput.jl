@@ -8,6 +8,7 @@ const QUEUE1 = "queue1"
 const ROUTE1 = "key1"
 const MSG_SIZE = 1024
 const NMSGS = 10^6
+const no_ack = true
 
 const M = Message(rand(UInt8, 1024), content_type="application/octet-stream", delivery_mode=PERSISTENT)
 
@@ -64,7 +65,7 @@ function publish(conn, chan1)
         basic_publish(chan1, M; exchange=EXCG_DIRECT, routing_key=ROUTE1)
         if (idx % 10000) == 0
             println("publishing $idx ...")
-            sleep(2)
+            sleep(1)
         end
     end
 end
@@ -83,12 +84,12 @@ function consume(conn, chan1)
             #basic_ack(chan1, 0; all_upto=true)
             println("ack sent $msg_count ...")
         end
-        basic_ack(chan1, rcvd_msg.delivery_tag)
+        no_ack || basic_ack(chan1, rcvd_msg.delivery_tag)
         if msg_count == NMSGS
             end_time = time()
         end
     end
-    success, consumer_tag = basic_consume(chan1, QUEUE1, consumer_fn)
+    success, consumer_tag = basic_consume(chan1, QUEUE1, consumer_fn; no_ack=no_ack)
     @test success
 
     # wait to receive all messages

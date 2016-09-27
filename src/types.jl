@@ -34,7 +34,7 @@ function TAMQPBit(b::TAMQPBit, pos::Int)
 end
 
 function TAMQPBit(b::TAMQPBit, setbit::TAMQPBit, pos::Int)
-    TAMQPBit(b.val & (setbit.val << (pos-1)))
+    TAMQPBit(b.val | (setbit.val << (pos-1)))
 end
 
 immutable TAMQPDecimalValue
