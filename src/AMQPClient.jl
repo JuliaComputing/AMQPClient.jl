@@ -1,6 +1,5 @@
 module AMQPClient
 
-using Compat
 using Base.I18n
 import Base: write, read, read!, close, convert, show, isopen
 
@@ -31,7 +30,7 @@ include("protocol.jl")
 include("convert.jl")
 include("show.jl")
 
-export connection, channel
+export connection, channel, CloseReason
 export exchange_declare, exchange_delete, exchange_bind, exchange_unbind
 export queue_declare, queue_bind, queue_unbind, queue_purge, queue_delete
 export tx_select, tx_commit, tx_rollback

@@ -25,25 +25,24 @@ function setup(;virtualhost="/", host="localhost", port=AMQPClient.AMQP_DEFAULT_
 
     # create and bind queues
     testlog("creating queues...")
-    success, queue1, message_count, consumer_count = queue_declare(chan1, QUEUE1)
+    success, message_count, consumer_count = queue_declare(chan1, QUEUE1)
     @test success
-    @test queue1 == QUEUE1
     @test message_count == 0
 
-    @test queue_bind(chan1, queue1, EXCG_DIRECT, ROUTE1)
+    @test queue_bind(chan1, QUEUE1, EXCG_DIRECT, ROUTE1)
 
-    conn, chan1, queue1
+    conn, chan1
 end
 
-function teardown(conn, chan1, queue1, delete=false)
+function teardown(conn, chan1, delete=false)
     testlog("closing down...")
     if delete
-        success, message_count = queue_purge(chan1, queue1)
+        success, message_count = queue_purge(chan1, QUEUE1)
         @test success
         @test message_count == 0
 
-        @test queue_unbind(chan1, queue1, EXCG_DIRECT, ROUTE1)
-        success, message_count = queue_delete(chan1, queue1)
+        @test queue_unbind(chan1, QUEUE1, EXCG_DIRECT, ROUTE1)
+        success, message_count = queue_delete(chan1, QUEUE1)
         @test success
         @test message_count == 0
     end
@@ -58,7 +57,7 @@ function teardown(conn, chan1, queue1, delete=false)
     @test !isopen(conn)
 end
 
-function publish(conn, chan1, queue1)
+function publish(conn, chan1)
     testlog("starting basic publisher...")
     # publish N messages
     for idx in 1:NMSGS
@@ -70,7 +69,7 @@ function publish(conn, chan1, queue1)
     end
 end
 
-function consume(conn, chan1, queue1)
+function consume(conn, chan1)
     testlog("starting basic consumer...")
     # start a consumer task
     global msg_count = 0
@@ -89,7 +88,7 @@ function consume(conn, chan1, queue1)
             end_time = time()
         end
     end
-    success, consumer_tag = basic_consume(chan1, queue1, consumer_fn)
+    success, consumer_tag = basic_consume(chan1, QUEUE1, consumer_fn)
     @test success
 
     # wait to receive all messages
@@ -106,18 +105,18 @@ function consume(conn, chan1, queue1)
 end
 
 function run_publisher()
-    conn, chan1, queue1 = AMPQTestThroughput.setup()
-    AMPQTestThroughput.publish(conn, chan1, queue1)
-    AMPQTestThroughput.teardown(conn, chan1, queue1, false) # exit without destroying queue
+    conn, chan1 = AMPQTestThroughput.setup()
+    AMPQTestThroughput.publish(conn, chan1)
+    AMPQTestThroughput.teardown(conn, chan1, false) # exit without destroying queue
     nothing
 end
 
 function run_consumer()
-    conn, chan1, queue1 = AMPQTestThroughput.setup()
-    AMPQTestThroughput.consume(conn, chan1, queue1)
+    conn, chan1 = AMPQTestThroughput.setup()
+    AMPQTestThroughput.consume(conn, chan1)
     println("waiting for publisher to exit gracefully...")
     sleep(10)  # wait for publisher to exit gracefully
-    AMPQTestThroughput.teardown(conn, chan1, queue1, true)
+    AMPQTestThroughput.teardown(conn, chan1, true)
     nothing
 end
 
