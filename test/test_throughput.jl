@@ -8,6 +8,7 @@ const QUEUE1 = "queue1"
 const ROUTE1 = "key1"
 const MSG_SIZE = 1024
 const NMSGS = 10^6
+const no_ack = true
 
 const M = Message(rand(UInt8, 1024), content_type="application/octet-stream", delivery_mode=PERSISTENT)
 
@@ -25,25 +26,24 @@ function setup(;virtualhost="/", host="localhost", port=AMQPClient.AMQP_DEFAULT_
 
     # create and bind queues
     testlog("creating queues...")
-    success, queue1, message_count, consumer_count = queue_declare(chan1, QUEUE1)
+    success, message_count, consumer_count = queue_declare(chan1, QUEUE1)
     @test success
-    @test queue1 == QUEUE1
     @test message_count == 0
 
-    @test queue_bind(chan1, queue1, EXCG_DIRECT, ROUTE1)
+    @test queue_bind(chan1, QUEUE1, EXCG_DIRECT, ROUTE1)
 
-    conn, chan1, queue1
+    conn, chan1
 end
 
-function teardown(conn, chan1, queue1, delete=false)
+function teardown(conn, chan1, delete=false)
     testlog("closing down...")
     if delete
-        success, message_count = queue_purge(chan1, queue1)
+        success, message_count = queue_purge(chan1, QUEUE1)
         @test success
         @test message_count == 0
 
-        @test queue_unbind(chan1, queue1, EXCG_DIRECT, ROUTE1)
-        success, message_count = queue_delete(chan1, queue1)
+        @test queue_unbind(chan1, QUEUE1, EXCG_DIRECT, ROUTE1)
+        success, message_count = queue_delete(chan1, QUEUE1)
         @test success
         @test message_count == 0
     end
@@ -58,19 +58,19 @@ function teardown(conn, chan1, queue1, delete=false)
     @test !isopen(conn)
 end
 
-function publish(conn, chan1, queue1)
+function publish(conn, chan1)
     testlog("starting basic publisher...")
     # publish N messages
     for idx in 1:NMSGS
         basic_publish(chan1, M; exchange=EXCG_DIRECT, routing_key=ROUTE1)
         if (idx % 10000) == 0
             println("publishing $idx ...")
-            sleep(2)
+            sleep(1)
         end
     end
 end
 
-function consume(conn, chan1, queue1)
+function consume(conn, chan1)
     testlog("starting basic consumer...")
     # start a consumer task
     global msg_count = 0
@@ -84,12 +84,12 @@ function consume(conn, chan1, queue1)
             #basic_ack(chan1, 0; all_upto=true)
             println("ack sent $msg_count ...")
         end
-        basic_ack(chan1, rcvd_msg.delivery_tag)
+        no_ack || basic_ack(chan1, rcvd_msg.delivery_tag)
         if msg_count == NMSGS
             end_time = time()
         end
     end
-    success, consumer_tag = basic_consume(chan1, queue1, consumer_fn)
+    success, consumer_tag = basic_consume(chan1, QUEUE1, consumer_fn; no_ack=no_ack)
     @test success
 
     # wait to receive all messages
@@ -106,18 +106,18 @@ function consume(conn, chan1, queue1)
 end
 
 function run_publisher()
-    conn, chan1, queue1 = AMPQTestThroughput.setup()
-    AMPQTestThroughput.publish(conn, chan1, queue1)
-    AMPQTestThroughput.teardown(conn, chan1, queue1, false) # exit without destroying queue
+    conn, chan1 = AMPQTestThroughput.setup()
+    AMPQTestThroughput.publish(conn, chan1)
+    AMPQTestThroughput.teardown(conn, chan1, false) # exit without destroying queue
     nothing
 end
 
 function run_consumer()
-    conn, chan1, queue1 = AMPQTestThroughput.setup()
-    AMPQTestThroughput.consume(conn, chan1, queue1)
+    conn, chan1 = AMPQTestThroughput.setup()
+    AMPQTestThroughput.consume(conn, chan1)
     println("waiting for publisher to exit gracefully...")
     sleep(10)  # wait for publisher to exit gracefully
-    AMPQTestThroughput.teardown(conn, chan1, queue1, true)
+    AMPQTestThroughput.teardown(conn, chan1, true)
     nothing
 end
 

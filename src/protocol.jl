@@ -107,12 +107,12 @@ write(io::IO, f::TAMQPGenericFrame) = write(io, hton(f.hdr), f.props, f.payload,
 """
 Given a generic frame, convert it to appropriate exact frame type.
 """
-function narrow_frame(f::TAMQPGenericFrame)
-    if f.hdr == FrameMethod
-        return TAMQPMethodFrame(f)
-    end
-    throw(AMQPProtocolException("Unknown frame type $(f.hdr)"))
-end
+#function narrow_frame(f::TAMQPGenericFrame)
+#    if f.hdr == FrameMethod
+#        return TAMQPMethodFrame(f)
+#    end
+#    throw(AMQPProtocolException("Unknown frame type $(f.hdr)"))
+#end
 
 function method_name(payload::TAMQPMethodPayload)
     c = CLASS_MAP[payload.class]
@@ -678,7 +678,7 @@ function queue_declare(chan::MessageChannel, name::String;
         passive::Bool=false, durable::Bool=false, exclusive::Bool=false, auto_delete::Bool=false,
         nowait::Bool=false, timeout::Int=DEFAULT_TIMEOUT,
         arguments::Dict{String,Any}=Dict{String,Any}())
-    _wait_resp(chan, (true, name, TAMQPMessageCount(0), Int32(0)), nowait, on_queue_declare_ok, :Queue, :DeclareOk, (false, name, TAMQPMessageCount(0), Int32(0)), timeout) do
+    _wait_resp(chan, (true, TAMQPMessageCount(0), Int32(0)), nowait, on_queue_declare_ok, :Queue, :DeclareOk, (false, TAMQPMessageCount(0), Int32(0)), timeout) do
         send_queue_declare(chan, name, passive, durable, exclusive, auto_delete, nowait, arguments)
     end
 end
@@ -1078,7 +1078,7 @@ function on_queue_declare_ok(chan::MessageChannel, m::TAMQPMethodFrame, ctx)
         name = convert(String, m.payload.fields[1].second)
         msg_count = m.payload.fields[2].second
         consumer_count = m.payload.fields[3].second
-        put!(ctx, (true, name, msg_count, consumer_count))
+        put!(ctx, (true, msg_count, consumer_count))
     end
     handle(chan, :Queue, :DeclareOk)
     nothing

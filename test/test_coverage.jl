@@ -20,25 +20,28 @@ function runtests(;virtualhost="/", host="localhost", port=AMQPClient.AMQP_DEFAU
     chan1 = channel(conn, AMQPClient.UNUSED_CHANNEL, true)
     @test chan1.id == 1
 
+    # test default exchange names
+    @test default_exchange_name() == ""
+    @test default_exchange_name(EXCHANGE_TYPE_DIRECT) == "amq.direct"
+
     # create exchanges
     testlog("creating exchanges...")
-    @test exchange_declare(chan1, EXCG_DIRECT, AMQPClient.EXCHANGE_TYPE_DIRECT; arguments=Dict{String,Any}("Hello"=>"World", "Foo"=>"bar"))
-    @test exchange_declare(chan1, EXCG_FANOUT, AMQPClient.EXCHANGE_TYPE_FANOUT)
+    @test exchange_declare(chan1, EXCG_DIRECT, EXCHANGE_TYPE_DIRECT; arguments=Dict{String,Any}("Hello"=>"World", "Foo"=>"bar"))
+    @test exchange_declare(chan1, EXCG_FANOUT, EXCHANGE_TYPE_FANOUT)
 
     # create and bind queues
     testlog("creating queues...")
-    success, queue1, message_count, consumer_count = queue_declare(chan1, QUEUE1)
+    success, message_count, consumer_count = queue_declare(chan1, QUEUE1)
     @test success
-    @test queue1 == QUEUE1
     @test message_count == 0
     @test consumer_count == 0
 
-    @test queue_bind(chan1, queue1, EXCG_DIRECT, ROUTE1)
+    @test queue_bind(chan1, QUEUE1, EXCG_DIRECT, ROUTE1)
 
     # rabbitmq 3.6.5 does not support qos
     # basic_qos(chan1, 1024*10, 10, false)
 
-    M = Message("hello world".data, content_type="text/plain", delivery_mode=PERSISTENT)
+    M = Message(convert(Vector{UInt8}, "hello world"), content_type="text/plain", delivery_mode=PERSISTENT)
 
     testlog("testing basic publish and get...")
     # publish 10 messages
@@ -48,7 +51,7 @@ function runtests(;virtualhost="/", host="localhost", port=AMQPClient.AMQP_DEFAU
 
     # basic get 10 messages
     for idx in 1:10
-        result = basic_get(chan1, queue1, false)
+        result = basic_get(chan1, QUEUE1, false)
         @test !isnull(result)
         rcvd_msg = get(result)
         basic_ack(chan1, rcvd_msg.delivery_tag)
@@ -60,19 +63,19 @@ function runtests(;virtualhost="/", host="localhost", port=AMQPClient.AMQP_DEFAU
     end
 
     # basic get returns null if no more messages
-    @test isnull(basic_get(chan1, queue1, false))
+    @test isnull(basic_get(chan1, QUEUE1, false))
 
     ## test reject and requeue
     #basic_publish(chan1, M; exchange=EXCG_DIRECT, routing_key=ROUTE1)
 
-    #result = basic_get(chan1, queue1, false)
+    #result = basic_get(chan1, QUEUE1, false)
     #@test !isnull(result)
     #rcvd_msg = get(result)
     #@test rcvd_msg.redelivered == false
 
     #basic_reject(chan1, rcvd_msg.delivery_tag; requeue=true)
 
-    #result = basic_get(chan1, queue1, false)
+    #result = basic_get(chan1, QUEUE1, false)
     #@test !isnull(result)
     #rcvd_msg = get(result)
     #@test rcvd_msg.redelivered == true
@@ -92,7 +95,7 @@ function runtests(;virtualhost="/", host="localhost", port=AMQPClient.AMQP_DEFAU
         println("received msg $(msg_count): $(String(rcvd_msg.data))")
         basic_ack(chan1, rcvd_msg.delivery_tag)
     end
-    success, consumer_tag = basic_consume(chan1, queue1, consumer_fn)
+    success, consumer_tag = basic_consume(chan1, QUEUE1, consumer_fn)
     @test success
 
     # publish 10 messages
@@ -133,12 +136,12 @@ function runtests(;virtualhost="/", host="localhost", port=AMQPClient.AMQP_DEFAU
     end
 
     testlog("closing down...")
-    success, message_count = queue_purge(chan1, queue1)
+    success, message_count = queue_purge(chan1, QUEUE1)
     @test success
     @test message_count == 0
 
-    @test queue_unbind(chan1, queue1, EXCG_DIRECT, ROUTE1)
-    success, message_count = queue_delete(chan1, queue1)
+    @test queue_unbind(chan1, QUEUE1, EXCG_DIRECT, ROUTE1)
+    success, message_count = queue_delete(chan1, QUEUE1)
     @test success
     @test message_count == 0
 
