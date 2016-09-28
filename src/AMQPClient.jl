@@ -1,3 +1,5 @@
+__precompile__(true)
+
 module AMQPClient
 
 using Base.I18n
