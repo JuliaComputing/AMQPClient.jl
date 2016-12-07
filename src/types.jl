@@ -257,7 +257,7 @@ function TAMQPGenericFrame(f::TAMQPMethodFrame)
     if bitpos > 0
         write(iob, bitval)
     end
-    bodypayload = TAMQPBodyPayload(takebuf_array(iob))
+    bodypayload = TAMQPBodyPayload(take!(iob))
     TAMQPGenericFrame(FrameMethod, TAMQPFrameProperties(f.props.channel, length(bodypayload.data)), bodypayload, FrameEnd)
 end
 
@@ -291,7 +291,7 @@ function TAMQPGenericFrame(f::TAMQPContentHeaderFrame)
             write(io, proplist[prop.name])
         end
     end
-    bodypayload = TAMQPBodyPayload(takebuf_array(iob))
+    bodypayload = TAMQPBodyPayload(take!(iob))
     TAMQPGenericFrame(FrameHeader, TAMQPFrameProperties(f.props.channel, length(bodypayload.data)), bodypayload, FrameEnd)
 end
 

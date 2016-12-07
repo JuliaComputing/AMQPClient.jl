@@ -1,5 +1,8 @@
+__precompile__(true)
+
 module AMQPClient
 
+using Compat
 using Base.I18n
 import Base: write, read, read!, close, convert, show, isopen
 
