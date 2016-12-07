@@ -7,7 +7,7 @@ const EXCG_DIRECT = "amq.direct"
 const QUEUE1 = "queue1"
 const ROUTE1 = "key1"
 const MSG_SIZE = 1024
-const NMSGS = 10^6
+const NMSGS = 10^5
 const no_ack = true
 
 const M = Message(rand(UInt8, 1024), content_type="application/octet-stream", delivery_mode=PERSISTENT)
@@ -121,4 +121,29 @@ function run_consumer()
     nothing
 end
 
+function spawn_test(script, flags)
+    opts = Base.JLOptions()
+    inline_flag = opts.can_inline == 1 ? `` : `--inline=no`
+    cov_flag = (opts.code_coverage == 1) ? `--code-coverage=user` :
+                 (opts.code_coverage == 2) ? `--code-coverage=all` :
+                 ``
+    srvrscript = joinpath(dirname(@__FILE__), script)
+    srvrcmd = `$(joinpath(JULIA_HOME, "julia")) $cov_flag $inline_flag $srvrscript $flags`
+    println("Running tests from ", script, "\n", "="^60)
+    ret = run(srvrcmd)
+    println("Finished ", script, "\n", "="^60)
+    nothing
+end
+
+function runtests()
+    consumer = @async spawn_test("test_throughput.jl", "--runconsumer")
+    publisher = @async spawn_test("test_throughput.jl", "--runpublisher")
+    wait(consumer)
+    wait(publisher)
+    nothing
+end
+
 end # module AMPQTestThroughput
+
+!isempty(ARGS) && (ARGS[1] == "--runpublisher") && AMPQTestThroughput.run_publisher()
+!isempty(ARGS) && (ARGS[1] == "--runconsumer")  && AMPQTestThroughput.run_consumer()
