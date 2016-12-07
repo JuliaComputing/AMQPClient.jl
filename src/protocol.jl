@@ -72,7 +72,7 @@ function write(io::IO, ft::TAMQPFieldTable)
     for fv in ft.data
         write(iob, fv)
     end
-    buff = takebuf_array(iob)
+    buff = take!(iob)
     len = convert(fieldtype(TAMQPFieldTable, :len), length(buff))
     @logmsg("write fieldtable length $len type: $(typeof(len))")
     l = write(io, hton(len))
