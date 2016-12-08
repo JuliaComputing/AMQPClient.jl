@@ -265,7 +265,7 @@ function send(c::MessageChannel, payload::TAMQPMethodPayload, msg::Nullable{Mess
         # send one or more message body frames
         offset = 1
         msglen = length(message.data)
-        while offset < msglen
+        while offset <= msglen
             msgend = min(msglen, offset + c.conn.framemax - 1)
             bodypayload = TAMQPBodyPayload(message.data[offset:msgend])
             offset = msgend + 1
