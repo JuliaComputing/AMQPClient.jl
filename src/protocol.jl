@@ -175,6 +175,7 @@ type Connection
 
     state::UInt8
     sendq::Channel{TAMQPGenericFrame}
+    sendlck::Channel{UInt8}
     channels::Dict{TAMQPChannel, AbstractChannel}
 
     sender::Nullable{Task}
@@ -185,9 +186,12 @@ type Connection
     heartbeat_time_client::Float64
 
     function Connection(virtualhost::String="/", host::String="localhost", port::Int=AMQP_DEFAULT_PORT)
+        sendq = Channel{TAMQPGenericFrame}(CONN_MAX_QUEUED)
+        sendlck = Channel{UInt8}(1)
+        put!(sendlck, 1)
         new(virtualhost, host, port, nothing,
             Dict{Symbol,Any}(), Dict{String,Any}(), 0, 0, 0,
-            CONN_STATE_CLOSED, Channel{TAMQPGenericFrame}(CONN_MAX_QUEUED), Dict{TAMQPChannel, AbstractChannel}(),
+            CONN_STATE_CLOSED, sendq, sendlck, Dict{TAMQPChannel, AbstractChannel}(),
             nothing, nothing, nothing,
             0.0, 0.0)
     end
@@ -244,10 +248,16 @@ get_property(c::Connection, s::Symbol, default) = get(c.properties, s, default)
 
 send(c::MessageChannel, f, msgframes::Vector=[]) = send(c.conn, f, msgframes)
 function send(c::Connection, f, msgframes::Vector=[])
-    put!(c.sendq, TAMQPGenericFrame(f))
-    for m in msgframes
-        put!(c.sendq, TAMQPGenericFrame(m))
-    end
+    #uncomment to enable synchronization (not required till we have preemptive tasks or threads)
+    #lck = take!(c.sendlck)
+    #try
+        put!(c.sendq, TAMQPGenericFrame(f))
+        for m in msgframes
+            put!(c.sendq, TAMQPGenericFrame(m))
+        end
+    #finally
+    #    put!(c.sendlck, lck)
+    #end
     nothing
 end
 function send(c::MessageChannel, payload::TAMQPMethodPayload, msg::Nullable{Message}=Nullable{Message}())
