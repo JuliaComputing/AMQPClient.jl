@@ -8,8 +8,10 @@ import Base: write, read, read!, close, convert, show, isopen
 
 # enable logging only during debugging
 #using Logging
-#const logger = Logging.configure(filename="AMQPClient.log", level=DEBUG)
-#const logger = Logging.configure(level=DEBUG)
+#function __init__()
+#    #Logging.configure(filename="AMQPClient.log", level=DEBUG)
+#    Logging.configure(level=DEBUG)
+#end
 #macro logmsg(s)
 #    quote
 #        debug("[", myid(), "-", "] ", $(esc(s)))
