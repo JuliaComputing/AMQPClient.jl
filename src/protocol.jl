@@ -249,15 +249,15 @@ get_property(c::Connection, s::Symbol, default) = get(c.properties, s, default)
 send(c::MessageChannel, f, msgframes::Vector=[]) = send(c.conn, f, msgframes)
 function send(c::Connection, f, msgframes::Vector=[])
     #uncomment to enable synchronization (not required till we have preemptive tasks or threads)
-    #lck = take!(c.sendlck)
-    #try
+    lck = take!(c.sendlck)
+    try
         put!(c.sendq, TAMQPGenericFrame(f))
         for m in msgframes
             put!(c.sendq, TAMQPGenericFrame(m))
         end
-    #finally
-    #    put!(c.sendlck, lck)
-    #end
+    finally
+        put!(c.sendlck, lck)
+    end
     nothing
 end
 function send(c::MessageChannel, payload::TAMQPMethodPayload, msg::Nullable{Message}=Nullable{Message}())
@@ -1191,8 +1191,10 @@ function on_channel_message_in(chan::MessageChannel, m::TAMQPContentBodyFrame, c
         # got all data for msg
         if isempty(msg.consumer_tag)
             put!(chan.chan_get, Nullable(shift!(chan.partial_msgs)))
-        else
+        elseif msg.consumer_tag in keys(chan.consumers)
             put!(chan.consumers[msg.consumer_tag].recvq, shift!(chan.partial_msgs))
+        else
+            @logmsg("discarding message, no consumer with tag $(msg.consumer_tag)")
         end
     end
 

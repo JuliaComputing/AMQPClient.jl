@@ -11,6 +11,11 @@ const ROUTE1 = "key1"
 testlog(msg) = println(msg)
 
 function runtests(;virtualhost="/", host="localhost", port=AMQPClient.AMQP_DEFAULT_PORT, auth_params=AMQPClient.DEFAULT_AUTH_PARAMS)
+    verify_spec()
+    @test default_exchange_name("direct") == "amq.direct"
+    @test default_exchange_name() == ""
+    @test AMQPClient.method_name(AMQPClient.TAMQPMethodPayload(:Basic, :Ack, (1, false))) == "Basic.Ack"
+
     # open a connection
     testlog("opening connection...")
     conn = connection(;virtualhost=virtualhost, host=host, port=port, auth_params=auth_params)
@@ -160,6 +165,16 @@ function runtests(;virtualhost="/", host="localhost", port=AMQPClient.AMQP_DEFAU
 
     testlog("done.")
     nothing
+end
+
+function verify_spec()
+    ALLCLASSES = (:Connection, :Basic, :Channel, :Confirm, :Exchange, :Queue, :Tx)
+    for n in ALLCLASSES
+        @test n in keys(AMQPClient.CLASSNAME_MAP)
+    end
+    for (n,v) in keys(AMQPClient.CLASSMETHODNAME_MAP)
+        @test n in ALLCLASSES
+    end
 end
 
 end # module AMPQTestCoverage
