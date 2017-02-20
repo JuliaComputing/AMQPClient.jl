@@ -34,19 +34,19 @@ const HardErrorNotImplemented = 540
 const HardErrorInternalError = 541
 
 # Domains
-typealias TAMQPConsumerTag TAMQPShortStr
-typealias TAMQPDeliveryTag Int64
-typealias TAMQPExchangeName TAMQPShortStr
-typealias TAMQPNoAck TAMQPBit
-typealias TAMQPNoLocal TAMQPBit
-typealias TAMQPNoWait TAMQPBit
-typealias TAMQPPath TAMQPShortStr
-typealias TAMQPPeerProperties TAMQPFieldTable
-typealias TAMQPQueueName TAMQPShortStr
-typealias TAMQPRedelivered TAMQPBit
-typealias TAMQPMessageCount Int32
-typealias TAMQPReplyCode Int16
-typealias TAMQPReplyText TAMQPShortStr
+const TAMQPConsumerTag = TAMQPShortStr
+const TAMQPDeliveryTag = Int64
+const TAMQPExchangeName = TAMQPShortStr
+const TAMQPNoAck = TAMQPBit
+const TAMQPNoLocal = TAMQPBit
+const TAMQPNoWait = TAMQPBit
+const TAMQPPath = TAMQPShortStr
+const TAMQPPeerProperties = TAMQPFieldTable
+const TAMQPQueueName = TAMQPShortStr
+const TAMQPRedelivered = TAMQPBit
+const TAMQPMessageCount = Int32
+const TAMQPReplyCode = Int16
+const TAMQPReplyText = TAMQPShortStr
 # end Domains
 
 # Classes

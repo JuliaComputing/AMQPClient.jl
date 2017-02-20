@@ -1,6 +1,6 @@
 convert{T<:Union{TAMQPShortStr,TAMQPLongStr}}(::Type{Any}, s::T) = convert(String, s)
 convert{T<:Union{TAMQPShortStr,TAMQPLongStr}}(::Type{String}, s::T) = String(convert(Array{UInt8,1}, s.data))
-convert{T<:Union{TAMQPShortStr,TAMQPLongStr}}(::Type{T}, s::AbstractString) = T(length(s), String(s).data)
+convert{T<:Union{TAMQPShortStr,TAMQPLongStr}}(::Type{T}, s::AbstractString) = T(length(s), Vector{UInt8}(s))
 convert(::Type{TAMQPLongStr}, d::Vector{UInt8}) = TAMQPLongStr(length(d), d)
 
 convert{T}(::Type{TAMQPFieldValue{T}}, v::T) = TAMQPFieldValue{T}(FieldIndicatorMap[T], v)
@@ -15,7 +15,7 @@ function convert(::Type{TAMQPFieldTable}, d::Dict{String,Any})
     #@logmsg("converting to TAMQPFieldTable")
     data = TAMQPFieldValuePair[]
     for (n,v) in d
-        push!(data, TAMQPFieldValuePair(n, as_fval(v)))
+        push!(data, TAMQPFieldValuePair(convert(TAMQPShortStr,n), as_fval(v)))
     end
     TAMQPFieldTable(length(data), data)
 end
