@@ -8,22 +8,23 @@ const ContentWeight = 0x0000
 const FrameEnd = 0xCE
 const HeartBeat = UInt8[8, 0, 0, FrameEnd]
 
+@compat abstract type TAMQPLengthPrefixed end
 
-#typealias TAMQPBit                  UInt8
-typealias TAMQPBool                 UInt8 # 0 = FALSE, else TRUE
-typealias TAMQPScale                UInt8 # number of decimal digits
-typealias TAMQPOctet                UInt8
-typealias TAMQPShortShortInt        UInt8
-typealias TAMQPShortShortUInt       UInt8
-typealias TAMQPShortInt             Int16
-typealias TAMQPShortUInt            UInt16
-typealias TAMQPLongInt              Int32
-typealias TAMQPLongUInt             UInt32
-typealias TAMQPLongLongInt          Int64
-typealias TAMQPLongLongUInt         UInt64
-typealias TAMQPFloat                Float32
-typealias TAMQPDouble               Float64
-typealias TAMQPTimeStamp            TAMQPLongLongUInt
+#const TAMQPBit                  = UInt8
+const TAMQPBool                 = UInt8 # 0 = FALSE, else TRUE
+const TAMQPScale                = UInt8 # number of decimal digits
+const TAMQPOctet                = UInt8
+const TAMQPShortShortInt        = UInt8
+const TAMQPShortShortUInt       = UInt8
+const TAMQPShortInt             = Int16
+const TAMQPShortUInt            = UInt16
+const TAMQPLongInt              = Int32
+const TAMQPLongUInt             = UInt32
+const TAMQPLongLongInt          = Int64
+const TAMQPLongLongUInt         = UInt64
+const TAMQPFloat                = Float32
+const TAMQPDouble               = Float64
+const TAMQPTimeStamp            = TAMQPLongLongUInt
 
 immutable TAMQPBit
     val::UInt8
@@ -42,46 +43,42 @@ immutable TAMQPDecimalValue
     val::TAMQPLongUInt
 end
 
-immutable TAMQPShortStr
+immutable TAMQPShortStr <: TAMQPLengthPrefixed
     len::TAMQPOctet
     data::Vector{Int8}
 end
 
-immutable TAMQPLongStr
+immutable TAMQPLongStr <: TAMQPLengthPrefixed
     len::TAMQPLongUInt
     data::Vector{UInt8}
 end
 
-typealias TAMQPFieldName TAMQPShortStr
+const TAMQPFieldName = TAMQPShortStr
+const TAMQPFV = Union{Real, TAMQPDecimalValue, TAMQPLengthPrefixed, Void}
 
-immutable TAMQPFieldValue{T}
+immutable TAMQPFieldValue{T <: TAMQPFV}
     typ::Char  # as in FieldValueIndicatorMap
     fld::T
 end
 
-function TAMQPFieldValue(typ::Char, fld)
-    T = FieldValueIndicatorMap[typ]
-    TAMQPFieldValue{T}(typ, fld)
-end
-
-immutable TAMQPFieldValuePair
+immutable TAMQPFieldValuePair{T <: TAMQPFV}
     name::TAMQPFieldName
-    val::TAMQPFieldValue
+    val::TAMQPFieldValue{T}
 end
 
-immutable TAMQPFieldArray
+immutable TAMQPFieldArray <: TAMQPLengthPrefixed
     len::TAMQPLongInt
     data::Vector{TAMQPFieldValue}
 end
 
-immutable TAMQPFieldTable
+immutable TAMQPFieldTable <: TAMQPLengthPrefixed
     len::TAMQPLongUInt
     data::Vector{TAMQPFieldValuePair}
 end
 
-typealias TAMQPField Union{TAMQPBit, TAMQPOctet, TAMQPShortInt, TAMQPShortUInt, TAMQPLongInt, TAMQPLongUInt, TAMQPLongLongInt, TAMQPLongLongUInt, TAMQPShortStr, TAMQPLongStr, TAMQPTimeStamp, TAMQPFieldTable}
+const TAMQPField = Union{TAMQPBit, Integer, TAMQPShortStr, TAMQPLongStr, TAMQPFieldTable}
 
-const FieldValueIndicatorMap = Dict{Char,Type}(
+const FieldValueIndicatorMap = Dict{Char,DataType}(
     't' => TAMQPBool,
     'b' => TAMQPShortShortInt,
     'B' => TAMQPShortShortUInt,
@@ -103,14 +100,14 @@ const FieldValueIndicatorMap = Dict{Char,Type}(
     'V' => Void
 )
 
-const FieldIndicatorMap = Dict{Type,Char}(v=>n for (n,v) in FieldValueIndicatorMap)
+const FieldIndicatorMap = Dict{DataType,Char}(v=>n for (n,v) in FieldValueIndicatorMap)
 
-typealias TAMQPChannel          TAMQPShortUInt
-typealias TAMQPPayloadSize      TAMQPLongUInt
-typealias TAMQPContentBodySize  TAMQPLongLongUInt
-typealias TAMQPClassId          UInt16
-typealias TAMQPMethodId         UInt16
-typealias TAMQPContentClass     TAMQPClassId
+const TAMQPChannel          = TAMQPShortUInt
+const TAMQPPayloadSize      = TAMQPLongUInt
+const TAMQPContentBodySize  = TAMQPLongLongUInt
+const TAMQPClassId          = UInt16
+const TAMQPMethodId         = UInt16
+const TAMQPContentClass     = TAMQPClassId
 
 immutable TAMQPFrameProperties
     channel::TAMQPChannel
@@ -139,7 +136,7 @@ immutable TAMQPMethodPayload
         class = ntoh(read(io, TAMQPClassId))
         method = ntoh(read(io, TAMQPMethodId))
         args = methodargs(class, method)
-        fields = Array(Pair{Symbol,TAMQPField}, length(args))
+        fields = Array{Pair{Symbol,TAMQPField}}(length(args))
         @logmsg("reading method payload class:$class, method:$method, nargs:$(length(args))")
         bitpos = 0
         bitval = TAMQPBit(0)

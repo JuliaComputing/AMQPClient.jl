@@ -96,7 +96,7 @@ function gen_spec(specfile)
         (name in keys(domainmap)) && continue
         name = "TAMQP" * name2sym(name)
         typ = domainmap[attribute(domain, "type")].name
-        println("typealias $name $typ")
+        println("const $name = $typ")
     end
     println(DOMAIN_BOTTOM)
 

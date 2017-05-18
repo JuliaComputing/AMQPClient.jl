@@ -94,6 +94,7 @@ function consume(conn, chan1)
 
     # wait to receive all messages
     while msg_count < NMSGS
+        println("$msg_count of $NMSGS messages processed")
         sleep(2)
     end
 
@@ -136,7 +137,10 @@ function spawn_test(script, flags)
 end
 
 function runtests()
+    println("starting consumer")
     consumer = @async spawn_test("test_throughput.jl", "--runconsumer")
+    sleep(5)
+    println("starting publisher")
     publisher = @async spawn_test("test_throughput.jl", "--runpublisher")
     wait(consumer)
     wait(publisher)
