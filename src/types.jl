@@ -198,7 +198,7 @@ immutable TAMQPHeaderPayload
         bodysize = length(message.data)
         flags = 0x0000
         for name in keys(message.properties)
-            flags = flags & PROPERTIES[name].mask
+            flags = flags | PROPERTIES[name].mask
         end
         new(class, ContentWeight, bodysize, TAMQPPropertyFlags(flags), message.properties)
     end
@@ -285,7 +285,7 @@ function TAMQPGenericFrame(f::TAMQPContentHeaderFrame)
     flags = propflags.flags
     for prop in SORTED_PROPERTIES
         if (flags & prop.mask) > 0x0000
-            write(io, proplist[prop.name])
+            write(iob, proplist[prop.name])
         end
     end
     bodypayload = TAMQPBodyPayload(take!(iob))
