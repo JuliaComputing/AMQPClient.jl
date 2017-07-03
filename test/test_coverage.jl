@@ -1,4 +1,4 @@
-module AMPQTestCoverage
+module AMQPTestCoverage
 
 using AMQPClient
 using Base.Test
@@ -180,4 +180,4 @@ function verify_spec()
     end
 end
 
-end # module AMPQTestCoverage
+end # module AMQPTestCoverage
