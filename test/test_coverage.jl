@@ -73,21 +73,21 @@ function runtests(;virtualhost="/", host="localhost", port=AMQPClient.AMQP_DEFAU
     @test isnull(basic_get(chan1, QUEUE1, false))
 
     ## test reject and requeue
-    #basic_publish(chan1, M; exchange=EXCG_DIRECT, routing_key=ROUTE1)
+    basic_publish(chan1, M; exchange=EXCG_DIRECT, routing_key=ROUTE1)
 
-    #result = basic_get(chan1, QUEUE1, false)
-    #@test !isnull(result)
-    #rcvd_msg = get(result)
-    #@test rcvd_msg.redelivered == false
+    result = basic_get(chan1, QUEUE1, false)
+    @test !isnull(result)
+    rcvd_msg = get(result)
+    @test rcvd_msg.redelivered == false
 
-    #basic_reject(chan1, rcvd_msg.delivery_tag; requeue=true)
+    basic_reject(chan1, rcvd_msg.delivery_tag; requeue=true)
 
-    #result = basic_get(chan1, QUEUE1, false)
-    #@test !isnull(result)
-    #rcvd_msg = get(result)
-    #@test rcvd_msg.redelivered == true
+    result = basic_get(chan1, QUEUE1, false)
+    @test !isnull(result)
+    rcvd_msg = get(result)
+    @test rcvd_msg.redelivered == true
 
-    #basic_ack(chan1, rcvd_msg.delivery_tag)
+    basic_ack(chan1, rcvd_msg.delivery_tag)
 
     testlog("testing basic consumer...")
     # start a consumer task
@@ -126,6 +126,7 @@ function runtests(;virtualhost="/", host="localhost", port=AMQPClient.AMQP_DEFAU
     @test tx_commit(chan1)
     @test tx_rollback(chan1)
 
+    # test heartbeats
     if 120 >= conn.conn.heartbeat > 0
         c = conn.conn
         testlog("testing heartbeats (waiting $(3*c.heartbeat) secs)...")
