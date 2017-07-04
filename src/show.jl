@@ -22,7 +22,7 @@ end
 
 function show(io::IO, f::TAMQPFieldValuePair)
     indent = isa(io, IOContext) ? get(io, :indent, "") : ""
-    print(indent)
+    print(io, indent)
     show(io, f.name)
     print(io, " => ")
     show(io, f.val)
@@ -52,7 +52,7 @@ function show(io::IO, fields::Vector{Pair{Symbol,TAMQPField}})
     idx = 1
     for fld in fields
         (idx > 1) && print(ioc, '\n')
-        print(indent)
+        print(ioc, indent)
         show(ioc, fld.first)
         print(ioc, " => ")
         show(ioc, fld.second)

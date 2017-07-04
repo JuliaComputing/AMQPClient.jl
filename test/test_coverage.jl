@@ -1,4 +1,4 @@
-module AMPQTestCoverage
+module AMQPTestCoverage
 
 using AMQPClient
 using Base.Test
@@ -12,6 +12,7 @@ testlog(msg) = println(msg)
 
 function runtests(;virtualhost="/", host="localhost", port=AMQPClient.AMQP_DEFAULT_PORT, auth_params=AMQPClient.DEFAULT_AUTH_PARAMS)
     verify_spec()
+    test_types()
     @test default_exchange_name("direct") == "amq.direct"
     @test default_exchange_name() == ""
     @test AMQPClient.method_name(AMQPClient.TAMQPMethodPayload(:Basic, :Ack, (1, false))) == "Basic.Ack"
@@ -73,21 +74,21 @@ function runtests(;virtualhost="/", host="localhost", port=AMQPClient.AMQP_DEFAU
     @test isnull(basic_get(chan1, QUEUE1, false))
 
     ## test reject and requeue
-    #basic_publish(chan1, M; exchange=EXCG_DIRECT, routing_key=ROUTE1)
+    basic_publish(chan1, M; exchange=EXCG_DIRECT, routing_key=ROUTE1)
 
-    #result = basic_get(chan1, QUEUE1, false)
-    #@test !isnull(result)
-    #rcvd_msg = get(result)
-    #@test rcvd_msg.redelivered == false
+    result = basic_get(chan1, QUEUE1, false)
+    @test !isnull(result)
+    rcvd_msg = get(result)
+    @test rcvd_msg.redelivered == false
 
-    #basic_reject(chan1, rcvd_msg.delivery_tag; requeue=true)
+    basic_reject(chan1, rcvd_msg.delivery_tag; requeue=true)
 
-    #result = basic_get(chan1, QUEUE1, false)
-    #@test !isnull(result)
-    #rcvd_msg = get(result)
-    #@test rcvd_msg.redelivered == true
+    result = basic_get(chan1, QUEUE1, false)
+    @test !isnull(result)
+    rcvd_msg = get(result)
+    @test rcvd_msg.redelivered == true
 
-    #basic_ack(chan1, rcvd_msg.delivery_tag)
+    basic_ack(chan1, rcvd_msg.delivery_tag)
 
     testlog("testing basic consumer...")
     # start a consumer task
@@ -126,6 +127,7 @@ function runtests(;virtualhost="/", host="localhost", port=AMQPClient.AMQP_DEFAU
     @test tx_commit(chan1)
     @test tx_rollback(chan1)
 
+    # test heartbeats
     if 120 >= conn.conn.heartbeat > 0
         c = conn.conn
         testlog("testing heartbeats (waiting $(3*c.heartbeat) secs)...")
@@ -179,4 +181,25 @@ function verify_spec()
     end
 end
 
-end # module AMPQTestCoverage
+function test_types()
+    d = Dict{String,Any}(
+        "bool"      => 0x1,
+        "int"       => 10,
+        "uint"      => 0x1,
+        "float"     => rand(),
+        "shortstr"  => convert(AMQPClient.TAMQPShortStr, randstring(10)),
+        "longstr"   => convert(AMQPClient.TAMQPLongStr, randstring(1024)))
+    ft = convert(AMQPClient.TAMQPFieldTable, d)
+    iob = IOBuffer()
+    show(iob, ft)
+    @test length(take!(iob)) > 0
+
+    fields = [Pair{Symbol,AMQPClient.TAMQPField}(:bit,          AMQPClient.TAMQPBit(0x1)),
+              Pair{Symbol,AMQPClient.TAMQPField}(:shortstr,     convert(AMQPClient.TAMQPShortStr, randstring(10))),
+              Pair{Symbol,AMQPClient.TAMQPField}(:longstr,      convert(AMQPClient.TAMQPLongStr, randstring(1024))),
+              Pair{Symbol,AMQPClient.TAMQPField}(:fieldtable,   ft)]
+    show(iob, fields)
+    @test length(take!(iob)) > 0
+end
+
+end # module AMQPTestCoverage

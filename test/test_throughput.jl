@@ -1,4 +1,4 @@
-module AMPQTestThroughput
+module AMQPTestThroughput
 
 using AMQPClient
 using Base.Test
@@ -107,18 +107,18 @@ function consume(conn, chan1)
 end
 
 function run_publisher()
-    conn, chan1 = AMPQTestThroughput.setup()
-    AMPQTestThroughput.publish(conn, chan1)
-    AMPQTestThroughput.teardown(conn, chan1, false) # exit without destroying queue
+    conn, chan1 = AMQPTestThroughput.setup()
+    AMQPTestThroughput.publish(conn, chan1)
+    AMQPTestThroughput.teardown(conn, chan1, false) # exit without destroying queue
     nothing
 end
 
 function run_consumer()
-    conn, chan1 = AMPQTestThroughput.setup()
-    AMPQTestThroughput.consume(conn, chan1)
+    conn, chan1 = AMQPTestThroughput.setup()
+    AMQPTestThroughput.consume(conn, chan1)
     println("waiting for publisher to exit gracefully...")
     sleep(10)  # wait for publisher to exit gracefully
-    AMPQTestThroughput.teardown(conn, chan1, true)
+    AMQPTestThroughput.teardown(conn, chan1, true)
     nothing
 end
 
@@ -147,7 +147,7 @@ function runtests()
     nothing
 end
 
-end # module AMPQTestThroughput
+end # module AMQPTestThroughput
 
-!isempty(ARGS) && (ARGS[1] == "--runpublisher") && AMPQTestThroughput.run_publisher()
-!isempty(ARGS) && (ARGS[1] == "--runconsumer")  && AMPQTestThroughput.run_consumer()
+!isempty(ARGS) && (ARGS[1] == "--runpublisher") && AMQPTestThroughput.run_publisher()
+!isempty(ARGS) && (ARGS[1] == "--runconsumer")  && AMQPTestThroughput.run_consumer()
