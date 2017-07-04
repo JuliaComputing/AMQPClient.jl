@@ -12,6 +12,7 @@ testlog(msg) = println(msg)
 
 function runtests(;virtualhost="/", host="localhost", port=AMQPClient.AMQP_DEFAULT_PORT, auth_params=AMQPClient.DEFAULT_AUTH_PARAMS)
     verify_spec()
+    test_types()
     @test default_exchange_name("direct") == "amq.direct"
     @test default_exchange_name() == ""
     @test AMQPClient.method_name(AMQPClient.TAMQPMethodPayload(:Basic, :Ack, (1, false))) == "Basic.Ack"
@@ -178,6 +179,27 @@ function verify_spec()
     for (n,v) in keys(AMQPClient.CLASSMETHODNAME_MAP)
         @test n in ALLCLASSES
     end
+end
+
+function test_types()
+    d = Dict{String,Any}(
+        "bool"      => 0x1,
+        "int"       => 10,
+        "uint"      => 0x1,
+        "float"     => rand(),
+        "shortstr"  => convert(AMQPClient.TAMQPShortStr, randstring(10)),
+        "longstr"   => convert(AMQPClient.TAMQPLongStr, randstring(1024)))
+    ft = convert(AMQPClient.TAMQPFieldTable, d)
+    iob = IOBuffer()
+    show(iob, ft)
+    @test length(take!(iob)) > 0
+
+    fields = [Pair{Symbol,AMQPClient.TAMQPField}(:bit,          AMQPClient.TAMQPBit(0x1)),
+              Pair{Symbol,AMQPClient.TAMQPField}(:shortstr,     convert(AMQPClient.TAMQPShortStr, randstring(10))),
+              Pair{Symbol,AMQPClient.TAMQPField}(:longstr,      convert(AMQPClient.TAMQPLongStr, randstring(1024))),
+              Pair{Symbol,AMQPClient.TAMQPField}(:fieldtable,   ft)]
+    show(iob, fields)
+    @test length(take!(iob)) > 0
 end
 
 end # module AMQPTestCoverage
