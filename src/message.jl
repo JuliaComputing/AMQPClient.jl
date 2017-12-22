@@ -48,7 +48,7 @@ function Message(data::Vector{UInt8}; kwargs...)
 end
 
 function set_properties(msg::Message; kwargs...)
-    for (k,v) in pairs(kwargs)
+    for (k,v) in Compat.pairs(kwargs)
         if v === nothing
             delete!(msg.properties, k)
         else
