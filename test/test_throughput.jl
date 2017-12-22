@@ -1,7 +1,11 @@
 module AMQPTestThroughput
 
 using AMQPClient
-using Base.Test
+@static if VERSION < v"0.7.0-DEV.2005"
+    using Base.Test
+else
+    using Test
+end
 
 const EXCG_DIRECT = "amq.direct"
 const QUEUE1 = "queue1"

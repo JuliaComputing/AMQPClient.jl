@@ -1,7 +1,11 @@
 module AMQPTestCoverage
 
 using AMQPClient
-using Base.Test
+@static if VERSION < v"0.7.0-DEV.2005"
+    using Base.Test
+else
+    using Test
+end
 
 const EXCG_DIRECT = "ExcgDirect"
 const EXCG_FANOUT = "ExcgFanout"
@@ -58,8 +62,8 @@ function runtests(;virtualhost="/", host="localhost", port=AMQPClient.AMQP_DEFAU
     # basic get 10 messages
     for idx in 1:10
         result = basic_get(chan1, QUEUE1, false)
-        @test !isnull(result)
-        rcvd_msg = get(result)
+        @test result !== nothing
+        rcvd_msg = result
         basic_ack(chan1, rcvd_msg.delivery_tag)
         @test rcvd_msg.remaining == (10-idx)
         @test rcvd_msg.exchange == EXCG_DIRECT
@@ -71,21 +75,21 @@ function runtests(;virtualhost="/", host="localhost", port=AMQPClient.AMQP_DEFAU
     end
 
     # basic get returns null if no more messages
-    @test isnull(basic_get(chan1, QUEUE1, false))
+    @test basic_get(chan1, QUEUE1, false) === nothing
 
     ## test reject and requeue
     basic_publish(chan1, M; exchange=EXCG_DIRECT, routing_key=ROUTE1)
 
     result = basic_get(chan1, QUEUE1, false)
-    @test !isnull(result)
-    rcvd_msg = get(result)
+    @test result !== nothing
+    rcvd_msg = result
     @test rcvd_msg.redelivered == false
 
     basic_reject(chan1, rcvd_msg.delivery_tag; requeue=true)
 
     result = basic_get(chan1, QUEUE1, false)
-    @test !isnull(result)
-    rcvd_msg = get(result)
+    @test result !== nothing
+    rcvd_msg = result
     @test rcvd_msg.redelivered == true
 
     basic_ack(chan1, rcvd_msg.delivery_tag)

@@ -8,7 +8,7 @@ const ContentWeight = 0x0000
 const FrameEnd = 0xCE
 const HeartBeat = UInt8[8, 0, 0, FrameEnd]
 
-@compat abstract type TAMQPLengthPrefixed end
+abstract type TAMQPLengthPrefixed end
 
 #const TAMQPBit                  = UInt8
 const TAMQPBool                 = UInt8 # 0 = FALSE, else TRUE
@@ -26,7 +26,7 @@ const TAMQPFloat                = Float32
 const TAMQPDouble               = Float64
 const TAMQPTimeStamp            = TAMQPLongLongUInt
 
-immutable TAMQPBit
+struct TAMQPBit
     val::UInt8
 end
 
@@ -38,40 +38,40 @@ function TAMQPBit(b::TAMQPBit, setbit::TAMQPBit, pos::Int)
     TAMQPBit(b.val | (setbit.val << (pos-1)))
 end
 
-immutable TAMQPDecimalValue
+struct TAMQPDecimalValue
     scale::TAMQPScale
     val::TAMQPLongUInt
 end
 
-immutable TAMQPShortStr <: TAMQPLengthPrefixed
+struct TAMQPShortStr <: TAMQPLengthPrefixed
     len::TAMQPOctet
     data::Vector{Int8}
 end
 
-immutable TAMQPLongStr <: TAMQPLengthPrefixed
+struct TAMQPLongStr <: TAMQPLengthPrefixed
     len::TAMQPLongUInt
     data::Vector{UInt8}
 end
 
 const TAMQPFieldName = TAMQPShortStr
-const TAMQPFV = Union{Real, TAMQPDecimalValue, TAMQPLengthPrefixed, Void}
+const TAMQPFV = Union{Real, TAMQPDecimalValue, TAMQPLengthPrefixed, Nothing}
 
-immutable TAMQPFieldValue{T <: TAMQPFV}
+struct TAMQPFieldValue{T <: TAMQPFV}
     typ::Char  # as in FieldValueIndicatorMap
     fld::T
 end
 
-immutable TAMQPFieldValuePair{T <: TAMQPFV}
+struct TAMQPFieldValuePair{T <: TAMQPFV}
     name::TAMQPFieldName
     val::TAMQPFieldValue{T}
 end
 
-immutable TAMQPFieldArray <: TAMQPLengthPrefixed
+struct TAMQPFieldArray <: TAMQPLengthPrefixed
     len::TAMQPLongInt
     data::Vector{TAMQPFieldValue}
 end
 
-immutable TAMQPFieldTable <: TAMQPLengthPrefixed
+struct TAMQPFieldTable <: TAMQPLengthPrefixed
     len::TAMQPLongUInt
     data::Vector{TAMQPFieldValuePair}
 end
@@ -97,7 +97,7 @@ const FieldValueIndicatorMap = Dict{Char,DataType}(
     'A' => TAMQPFieldArray,
     'T' => TAMQPTimeStamp,
     'F' => TAMQPFieldTable,
-    'V' => Void
+    'V' => Nothing
 )
 
 const FieldIndicatorMap = Dict{DataType,Char}(v=>n for (n,v) in FieldValueIndicatorMap)
@@ -109,23 +109,23 @@ const TAMQPClassId          = UInt16
 const TAMQPMethodId         = UInt16
 const TAMQPContentClass     = TAMQPClassId
 
-immutable TAMQPFrameProperties
+struct TAMQPFrameProperties
     channel::TAMQPChannel
     payloadsize::TAMQPPayloadSize
 end
 
-immutable TAMQPPropertyFlags
+struct TAMQPPropertyFlags
     flags::UInt16
-    nextval::Nullable{TAMQPPropertyFlags}
+    nextval::Union{Nothing, TAMQPPropertyFlags}
 end
 TAMQPPropertyFlags(flags::UInt16) = TAMQPPropertyFlags(flags, nothing)
 
-immutable TAMQPBodyPayload
+struct TAMQPBodyPayload
     # TODO: may be better to allow sub arrays, for efficient writing of large messages
     data::Vector{TAMQPOctet}
 end
 
-immutable TAMQPMethodPayload
+struct TAMQPMethodPayload
     class::TAMQPClassId
     method::TAMQPMethodId
     fields::Vector{Pair{Symbol,TAMQPField}}
@@ -169,7 +169,7 @@ immutable TAMQPMethodPayload
     end
 end
 
-immutable TAMQPHeaderPayload
+struct TAMQPHeaderPayload
     class::TAMQPContentClass
     weight::UInt16  # must be ContentWeight
     bodysize::TAMQPContentBodySize
@@ -205,7 +205,7 @@ immutable TAMQPHeaderPayload
 end
 
 # Generic frame, used to read any frame
-immutable TAMQPGenericFrame
+struct TAMQPGenericFrame
     hdr::UInt8
     props::TAMQPFrameProperties
     payload::TAMQPBodyPayload
@@ -213,7 +213,7 @@ immutable TAMQPGenericFrame
 end
 
 # Type = 1, "METHOD": method frame
-immutable TAMQPMethodFrame
+struct TAMQPMethodFrame
     props::TAMQPFrameProperties
     payload::TAMQPMethodPayload
 end
@@ -259,7 +259,7 @@ function TAMQPGenericFrame(f::TAMQPMethodFrame)
 end
 
 # Type = 2, "HEADER": content header frame.
-immutable TAMQPContentHeaderFrame
+struct TAMQPContentHeaderFrame
     props::TAMQPFrameProperties
     hdrpayload::TAMQPHeaderPayload
 end
@@ -293,7 +293,7 @@ function TAMQPGenericFrame(f::TAMQPContentHeaderFrame)
 end
 
 # Type = 3, "BODY": content body frame.
-immutable TAMQPContentBodyFrame
+struct TAMQPContentBodyFrame
     props::TAMQPFrameProperties
     payload::TAMQPBodyPayload
 end
@@ -310,7 +310,7 @@ function TAMQPGenericFrame(f::TAMQPContentBodyFrame)
 end
 
 # Type = 4, "HEARTBEAT": heartbeat frame.
-immutable TAMQPHeartBeatFrame
+struct TAMQPHeartBeatFrame
 end
 
 function TAMQPHeartBeatFrame(f::TAMQPGenericFrame)
@@ -323,40 +323,40 @@ function TAMQPGenericFrame(f::TAMQPHeartBeatFrame)
     TAMQPGenericFrame(FrameHeartbeat, TAMQPFrameProperties(DEFAULT_CHANNEL, 0), TAMQPBodyPayload(TAMQPOctet[]), FrameEnd)
 end
 
-immutable TAMQPContent
+struct TAMQPContent
     hdr::TAMQPContentHeaderFrame
     body::Vector{TAMQPContentBodyFrame}
 end
 
-immutable TAMQPMethod
+struct TAMQPMethod
     frame::TAMQPMethodFrame
-    content::Nullable{TAMQPContent}
+    content::Union{Nothing, TAMQPContent}
 end
 
 # Exceptions
-type AMQPProtocolException <: Exception
+struct AMQPProtocolException <: Exception
     msg::String
 end
 
-type AMQPClientException <: Exception
+struct AMQPClientException <: Exception
     msg::String
 end
 
 # Spec code gen types
-immutable MethodSpec
+struct MethodSpec
     id::Int
     name::Symbol
     respname::Symbol
     args::Vector{Pair{Symbol,DataType}}
 end
 
-immutable ClassSpec
+struct ClassSpec
     id::Int
     name::Symbol 
     method_map::Dict{Int,MethodSpec}
 end
 
-immutable CloseReason
+struct CloseReason
     code::Int16
     msg::TAMQPShortStr
     classid::TAMQPClassId
