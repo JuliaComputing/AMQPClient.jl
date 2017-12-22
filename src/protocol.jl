@@ -40,7 +40,7 @@ function read(io::IO, ::Type{TAMQPLongStr})
     TAMQPLongStr(len, read!(io, Array{UInt8}(len)))
 end
 
-write{T<:Union{TAMQPShortStr,TAMQPLongStr}}(io::IO, s::T) = write(io, hton(s.len), s.data)
+write(io::IO, s::T) where {T<:Union{TAMQPShortStr,TAMQPLongStr}} = write(io, hton(s.len), s.data)
 
 function read(io::IO, ::Type{TAMQPFieldValue})
     c = read(io, Char)
@@ -160,13 +160,13 @@ const CONN_STATE_OPEN = 2
 const CONN_STATE_CLOSING = 3
 const CONN_MAX_QUEUED = 1024 #typemax(Int)
 
-@compat abstract type AbstractChannel end
+abstract type AbstractChannel end
 
-type Connection
+mutable struct Connection
     virtualhost::String
     host::String
     port::Int
-    sock::Nullable{TCPSocket}
+    sock::Union{Nothing, TCPSocket}
 
     properties::Dict{Symbol,Any}
     capabilities::Dict{String,Any}
@@ -179,9 +179,9 @@ type Connection
     sendlck::Channel{UInt8}
     channels::Dict{TAMQPChannel, AbstractChannel}
 
-    sender::Nullable{Task}
-    receiver::Nullable{Task}
-    heartbeater::Nullable{Task}
+    sender::Union{Nothing, Task}
+    receiver::Union{Nothing, Task}
+    heartbeater::Union{Nothing, Task}
 
     heartbeat_time_server::Float64
     heartbeat_time_client::Float64
@@ -198,7 +198,7 @@ type Connection
     end
 end
 
-type MessageConsumer
+mutable struct MessageConsumer
     chan_id::TAMQPChannel
     consumer_tag::String
     recvq::Channel{Message}
@@ -214,34 +214,34 @@ end
 
 close(consumer::MessageConsumer) = close(consumer.recvq)
 
-type MessageChannel <: AbstractChannel
+mutable struct MessageChannel <: AbstractChannel
     id::TAMQPChannel
     conn::Connection
     state::UInt8
     flow::Bool
 
     recvq::Channel{TAMQPGenericFrame}
-    receiver::Nullable{Task}
+    receiver::Union{Nothing, Task}
     callbacks::Dict{Tuple,Tuple{Function,Any}}
 
     partial_msgs::Vector{Message} # holds partial messages while they are getting read (message bodies arrive in sequence)
-    chan_get::Channel{Nullable{Message}}  # channel used for received messages, in sync get call (TODO: maybe type more strongly?)
+    chan_get::Channel{Union{Nothing, Message}}  # channel used for received messages, in sync get call (TODO: maybe type more strongly?)
     consumers::Dict{String,MessageConsumer}
 
-    closereason::Nullable{CloseReason}
+    closereason::Union{Nothing, CloseReason}
 
     function MessageChannel(id, conn)
         new(id, conn, CONN_STATE_CLOSED, true,
             Channel{TAMQPGenericFrame}(CONN_MAX_QUEUED), nothing, Dict{Tuple,Tuple{Function,Any}}(),
-            Message[], Channel{Nullable{Message}}(1), Dict{String,MessageConsumer}(),
+            Message[], Channel{Union{Nothing, Message}}(1), Dict{String,MessageConsumer}(),
             nothing)
     end
 end
 
 sock(c::MessageChannel) = sock(c.conn)
-sock(c::Connection) = get(c.sock)
+sock(c::Connection) = c.sock
 
-isopen(c::Connection) = !isnull(c.sock) && isopen(get(c.sock))
+isopen(c::Connection) = c.sock !== nothing && isopen(c.sock)
 isopen(c::MessageChannel) = isopen(c.conn) && (c.id in keys(c.conn.channels))
 
 get_property(c::MessageChannel, s::Symbol, default) = get_property(c.conn, s, default)
@@ -261,13 +261,13 @@ function send(c::Connection, f, msgframes::Vector=[])
     end
     nothing
 end
-function send(c::MessageChannel, payload::TAMQPMethodPayload, msg::Nullable{Message}=Nullable{Message}())
-    logstrmsg = isnull(msg) ? "without" : "with"
+function send(c::MessageChannel, payload::TAMQPMethodPayload, msg::Union{Nothing, Message}=nothing)
+    logstrmsg = msg === nothing ? "without" : "with"
     @logmsg("sending $(method_name(payload)) $logstrmsg content")
     frameprop = TAMQPFrameProperties(c.id,0)
-    if !isnull(msg)
+    if msg !== nothing
         msgframes = []
-        message = get(msg)
+        message = msg
 
         # send message header frame
         hdrpayload = TAMQPHeaderPayload(payload.class, message)
@@ -493,7 +493,7 @@ function connection(;virtualhost="/", host="localhost", port=AMQP_DEFAULT_PORT, 
     handle(chan, :Connection, :Start, on_connection_start, ctx)
 
     # open socket and start processor tasks
-    conn.sock = Nullable(connect(conn.host, conn.port))
+    conn.sock = connect(conn.host, conn.port)
     conn.sender = @async connection_processor(conn, "ConnectionSender", connection_sender)
     conn.receiver = @async connection_processor(conn, "ConnectionReceiver", connection_receiver)
     chan.receiver = @async connection_processor(chan, "ChannelReceiver($(chan.id))", channel_receiver)
@@ -569,7 +569,7 @@ function close(conn::Connection, handshake::Bool=true, by_peer::Bool=false, repl
 
     if !handshake || by_peer
         # close socket
-        close(get(conn.sock))
+        close(conn.sock)
         conn.sock = nothing
 
         # reset all members
@@ -616,9 +616,9 @@ const EXCHANGE_TYPE_HEADERS = "headers"    # optional, must test before typing t
 default_exchange_name(excg_type) = ("amq." * excg_type)
 default_exchange_name() = ""
 
-function _wait_resp{T}(sendmethod, chan::MessageChannel, default_result::T, 
+function _wait_resp(sendmethod, chan::MessageChannel, default_result::T, 
         nowait::Bool=true, resp_handler=nothing, resp_class=nothing, resp_meth=nothing,
-        timeout_result::T=default_result, timeout::Int=DEFAULT_TIMEOUT)
+        timeout_result::T=default_result, timeout::Int=DEFAULT_TIMEOUT) where {T}
     result = default_result
     if !nowait
         reply = Channel{T}(1)
@@ -811,7 +811,7 @@ function basic_publish(chan::MessageChannel, msg::Message; exchange::String="", 
     send_basic_publish(chan, msg, exchange, routing_key, mandatory, immediate)
 end
 
-const GET_EMPTY_RESP = Nullable{Message}()
+const GET_EMPTY_RESP = nothing
 function basic_get(chan::MessageChannel, queue::String, no_ack::Bool)
     send_basic_get(chan, queue, no_ack)
     take!(chan.chan_get)
@@ -1126,7 +1126,7 @@ send_basic_consume(chan::MessageChannel, queue::String, consumer_tag::String, no
 
 send_basic_cancel(chan::MessageChannel, consumer_tag::String, nowait::Bool) = send(chan, TAMQPMethodPayload(:Basic, :Cancel, (consumer_tag, nowait)))
 send_basic_publish(chan::MessageChannel, msg::Message, exchange::String, routing_key::String, mandatory::Bool=false, immediate::Bool=false) =
-    send(chan, TAMQPMethodPayload(:Basic, :Publish, (0, exchange, routing_key, mandatory, immediate)), Nullable(msg))
+    send(chan, TAMQPMethodPayload(:Basic, :Publish, (0, exchange, routing_key, mandatory, immediate)), msg)
 send_basic_get(chan::MessageChannel, queue::String, no_ack::Bool) = send(chan, TAMQPMethodPayload(:Basic, :Get, (0, queue, no_ack)))
 send_basic_ack(chan::MessageChannel, delivery_tag::TAMQPDeliveryTag, all_upto::Bool) = send(chan, TAMQPMethodPayload(:Basic, :Ack, (delivery_tag, all_upto)))
 send_basic_reject(chan::MessageChannel, delivery_tag::TAMQPDeliveryTag, requeue::Bool) = send(chan, TAMQPMethodPayload(:Basic, :Reject, (delivery_tag, requeue)))
@@ -1191,7 +1191,7 @@ function on_channel_message_in(chan::MessageChannel, m::TAMQPContentBodyFrame, c
     if msg.filled >= length(msg.data)
         # got all data for msg
         if isempty(msg.consumer_tag)
-            put!(chan.chan_get, Nullable(shift!(chan.partial_msgs)))
+            put!(chan.chan_get, shift!(chan.partial_msgs))
         elseif msg.consumer_tag in keys(chan.consumers)
             put!(chan.consumers[msg.consumer_tag].recvq, shift!(chan.partial_msgs))
         else
