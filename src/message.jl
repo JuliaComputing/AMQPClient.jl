@@ -47,8 +47,14 @@ function Message(data::Vector{UInt8}; kwargs...)
     msg
 end
 
+if VERSION < v"0.7-DEV"
+    keywordargs(x) = x
+else
+    keywordargs(x) = pairs(x)
+end
+
 function set_properties(msg::Message; kwargs...)
-    for (k,v) in Compat.pairs(kwargs)
+    for (k,v) in keywordargs(kwargs)
         if v === nothing
             delete!(msg.properties, k)
         else
