@@ -40,7 +40,7 @@ function show(io::IO, f::TAMQPFieldTable)
     end
 end
 
-function show{T<:Union{TAMQPShortStr,TAMQPLongStr}}(io::IO, s::T)
+function show(io::IO, s::T) where {T<:Union{TAMQPShortStr,TAMQPLongStr}}
     print(io, convert(String, s))
 end
 

@@ -32,15 +32,15 @@ write(io::IO, b::TAMQPBodyPayload) = write(io, b.data)
 
 function read(io::IO, ::Type{TAMQPShortStr})
     len = ntoh(read(io, TAMQPOctet))
-    TAMQPShortStr(len, read!(io, Array{UInt8}(len)))
+    TAMQPShortStr(len, read!(io, Vector{UInt8}(uninitialized, len)))
 end
 
 function read(io::IO, ::Type{TAMQPLongStr})
     len = ntoh(read(io, TAMQPLongUInt))
-    TAMQPLongStr(len, read!(io, Array{UInt8}(len)))
+    TAMQPLongStr(len, read!(io, Vector{UInt8}(uninitialized, len)))
 end
 
-write{T<:Union{TAMQPShortStr,TAMQPLongStr}}(io::IO, s::T) = write(io, hton(s.len), s.data)
+write(io::IO, s::T) where {T<:Union{TAMQPShortStr,TAMQPLongStr}} = write(io, hton(s.len), s.data)
 
 function read(io::IO, ::Type{TAMQPFieldValue})
     c = read(io, Char)
@@ -57,8 +57,8 @@ write(io::IO, fv::TAMQPFieldValuePair) = write(io, fv.name, fv.val)
 
 function read(io::IO, ::Type{TAMQPFieldTable})
     len = ntoh(read(io, fieldtype(TAMQPFieldTable, :len)))
-    @logmsg("read fieldtable length $(len)")
-    buff = read!(io, Array{UInt8}(len))
+    @debug("read fieldtable length $(len)")
+    buff = read!(io, Vector{UInt8}(uninitialized, len))
     data = TAMQPFieldValuePair[]
     iob = IOBuffer(buff)
     while !eof(iob)
@@ -68,14 +68,14 @@ function read(io::IO, ::Type{TAMQPFieldTable})
 end
 
 function write(io::IO, ft::TAMQPFieldTable)
-    @logmsg("write fieldtable nfields $(length(ft.data))")
+    @debug("write fieldtable nfields $(length(ft.data))")
     iob = IOBuffer()
     for fv in ft.data
         write(iob, fv)
     end
     buff = take!(iob)
     len = convert(fieldtype(TAMQPFieldTable, :len), length(buff))
-    @logmsg("write fieldtable length $len type: $(typeof(len))")
+    @debug("write fieldtable length $len type: $(typeof(len))")
     l = write(io, hton(len))
     if len > 0
         l += write(io, buff)
@@ -96,8 +96,8 @@ function read(io::IO, ::Type{TAMQPGenericFrame})
     hdr = ntoh(read(io, fieldtype(TAMQPGenericFrame, :hdr)))
     @assert hdr in (1,2,3,8)
     props = read(io, fieldtype(TAMQPGenericFrame, :props))
-    @logmsg("reading generic frame type:$hdr, channel:$(props.channel), payloadsize:$(props.payloadsize)")
-    payload = read!(io, TAMQPBodyPayload(Array{TAMQPOctet}(props.payloadsize)))
+    @debug("reading generic frame type:$hdr, channel:$(props.channel), payloadsize:$(props.payloadsize)")
+    payload = read!(io, TAMQPBodyPayload(Vector{TAMQPOctet}(uninitialized, props.payloadsize)))
     fend = ntoh(read(io, fieldtype(TAMQPGenericFrame, :fend)))
     @assert fend == FrameEnd
     TAMQPGenericFrame(hdr, props, payload, fend)
@@ -160,13 +160,13 @@ const CONN_STATE_OPEN = 2
 const CONN_STATE_CLOSING = 3
 const CONN_MAX_QUEUED = 1024 #typemax(Int)
 
-@compat abstract type AbstractChannel end
+abstract type AbstractChannel end
 
-type Connection
+mutable struct Connection
     virtualhost::String
     host::String
     port::Int
-    sock::Nullable{TCPSocket}
+    sock::Union{TCPSocket, Nothing}
 
     properties::Dict{Symbol,Any}
     capabilities::Dict{String,Any}
@@ -179,9 +179,9 @@ type Connection
     sendlck::Channel{UInt8}
     channels::Dict{TAMQPChannel, AbstractChannel}
 
-    sender::Nullable{Task}
-    receiver::Nullable{Task}
-    heartbeater::Nullable{Task}
+    sender::Union{Task, Nothing}
+    receiver::Union{Task, Nothing}
+    heartbeater::Union{Task, Nothing}
 
     heartbeat_time_server::Float64
     heartbeat_time_client::Float64
@@ -198,7 +198,7 @@ type Connection
     end
 end
 
-type MessageConsumer
+mutable struct MessageConsumer
     chan_id::TAMQPChannel
     consumer_tag::String
     recvq::Channel{Message}
@@ -214,34 +214,34 @@ end
 
 close(consumer::MessageConsumer) = close(consumer.recvq)
 
-type MessageChannel <: AbstractChannel
+mutable struct MessageChannel <: AbstractChannel
     id::TAMQPChannel
     conn::Connection
     state::UInt8
     flow::Bool
 
     recvq::Channel{TAMQPGenericFrame}
-    receiver::Nullable{Task}
+    receiver::Union{Task, Nothing}
     callbacks::Dict{Tuple,Tuple{Function,Any}}
 
     partial_msgs::Vector{Message} # holds partial messages while they are getting read (message bodies arrive in sequence)
-    chan_get::Channel{Nullable{Message}}  # channel used for received messages, in sync get call (TODO: maybe type more strongly?)
+    chan_get::Channel{Union{Message, Nothing}}  # channel used for received messages, in sync get call (TODO: maybe type more strongly?)
     consumers::Dict{String,MessageConsumer}
 
-    closereason::Nullable{CloseReason}
+    closereason::Union{CloseReason, Nothing}
 
     function MessageChannel(id, conn)
         new(id, conn, CONN_STATE_CLOSED, true,
             Channel{TAMQPGenericFrame}(CONN_MAX_QUEUED), nothing, Dict{Tuple,Tuple{Function,Any}}(),
-            Message[], Channel{Nullable{Message}}(1), Dict{String,MessageConsumer}(),
+            Message[], Channel{Union{Message, Nothing}}(1), Dict{String,MessageConsumer}(),
             nothing)
     end
 end
 
 sock(c::MessageChannel) = sock(c.conn)
-sock(c::Connection) = get(c.sock)
+sock(c::Connection) = c.sock
 
-isopen(c::Connection) = !isnull(c.sock) && isopen(get(c.sock))
+isopen(c::Connection) = c.sock !== nothing && isopen(c.sock)
 isopen(c::MessageChannel) = isopen(c.conn) && (c.id in keys(c.conn.channels))
 
 get_property(c::MessageChannel, s::Symbol, default) = get_property(c.conn, s, default)
@@ -261,13 +261,13 @@ function send(c::Connection, f, msgframes::Vector=[])
     end
     nothing
 end
-function send(c::MessageChannel, payload::TAMQPMethodPayload, msg::Nullable{Message}=Nullable{Message}())
-    logstrmsg = isnull(msg) ? "without" : "with"
-    @logmsg("sending $(method_name(payload)) $logstrmsg content")
+function send(c::MessageChannel, payload::TAMQPMethodPayload, msg::Union{Message, Nothing}=nothing)
+    logstrmsg = msg === nothing ? "without" : "with"
+    @debug("sending $(method_name(payload)) $logstrmsg content")
     frameprop = TAMQPFrameProperties(c.id,0)
-    if !isnull(msg)
+    if msg !== nothing
         msgframes = []
-        message = get(msg)
+        message = msg
 
         # send message header frame
         hdrpayload = TAMQPHeaderPayload(payload.class, message)
@@ -302,7 +302,7 @@ function wait_for_state(c, states; interval=1, timeout=typemax(Int))
 end
 
 function connection_processor(c, name, fn)
-    @logmsg("Starting $name task")
+    @debug("Starting $name task")
     try
         while true
             fn(c)
@@ -313,7 +313,7 @@ function connection_processor(c, name, fn)
             close(c)
             reason = reason * " Unhandled exception: $err"
             #showerror(STDERR, err)
-            @logmsg(reason)
+            @debug(reason)
         else
             isconnclosed = !isopen(c)
             ischanclosed = isa(c, MessageChannel) && isa(err, InvalidStateException) && err.state == :closed
@@ -323,11 +323,11 @@ function connection_processor(c, name, fn)
                     reason = reason * " by peer"
                     close(c, false, true)
                 end
-                @logmsg(reason)
+                @debug(reason)
             else
                 reason = reason * " Unhandled exception: $err"
                 #showerror(STDERR, err)
-                @logmsg(reason)
+                @debug(reason)
                 close(c, false, true)
                 #rethrow(err)
             end
@@ -337,9 +337,9 @@ end
 
 function connection_sender(c::Connection)
     msg = take!(c.sendq)
-    @logmsg("==> sending on conn $(c.virtualhost)")
+    @debug("==> sending on conn $(c.virtualhost)")
     nbytes = write(sock(c), msg)
-    @logmsg("==> sent $nbytes bytes")
+    @debug("==> sent $nbytes bytes")
 
     # update heartbeat time for client
     c.heartbeat_time_client = time()
@@ -354,9 +354,9 @@ function connection_receiver(c::Connection)
     c.heartbeat_time_server = time()
 
     channelid = f.props.channel
-    @logmsg("<== read message on conn $(c.virtualhost) for chan $channelid")
+    @debug("<== read message on conn $(c.virtualhost) for chan $channelid")
     if !(channelid in keys(c.channels))
-        @logmsg("Discarding message for unknown channel $channelid")
+        @debug("Discarding message for unknown channel $channelid")
     end
     chan = channel(c, channelid)
     put!(chan.recvq, f)
@@ -374,7 +374,7 @@ function connection_heartbeater(c::Connection)
     end
 
     if (now - c.heartbeat_time_server) > (2 * c.heartbeat)
-        @logmsg("server heartbeat missed for $(now - c.heartbeat_time_server) seconds")
+        @debug("server heartbeat missed for $(now - c.heartbeat_time_server) seconds")
         close(c, false, false)
     end
     nothing
@@ -384,23 +384,23 @@ function channel_receiver(c::MessageChannel)
     f = take!(c.recvq)
     if f.hdr == FrameMethod
         m = TAMQPMethodFrame(f)
-        @logmsg("<== channel: $(f.props.channel), class:$(m.payload.class), method:$(m.payload.method)")
+        @debug("<== channel: $(f.props.channel), class:$(m.payload.class), method:$(m.payload.method)")
         cbkey = (f.hdr, m.payload.class, m.payload.method)
     elseif f.hdr == FrameHeartbeat
         m = TAMQPHeartBeatFrame(f)
-        @logmsg("<== channel: $(f.props.channel), heartbeat")
+        @debug("<== channel: $(f.props.channel), heartbeat")
         cbkey = (f.hdr,)
     elseif f.hdr == FrameHeader
         m = TAMQPContentHeaderFrame(f)
-        @logmsg("<== channel: $(f.props.channel), contentheader")
+        @debug("<== channel: $(f.props.channel), contentheader")
         cbkey = (f.hdr,)
     elseif f.hdr == FrameBody
         m = TAMQPContentBodyFrame(f)
-        @logmsg("<== channel: $(f.props.channel), contentbody")
+        @debug("<== channel: $(f.props.channel), contentbody")
         cbkey = (f.hdr,)
     else
         m = f
-        @logmsg("<== channel: $(f.props.channel), unhandled frame type $(f.hdr)")
+        @debug("<== channel: $(f.props.channel), unhandled frame type $(f.hdr)")
         cbkey = (f.hdr,)
     end
     (cb,ctx) = get(c.callbacks, cbkey, (on_unexpected_message, nothing))
@@ -483,26 +483,26 @@ function channel(c::Connection, id::Integer, create::Bool; connect_timeout=DEFAU
     chan
 end
 
-function connection(;virtualhost="/", host="localhost", port=AMQP_DEFAULT_PORT, auth_params=DEFAULT_AUTH_PARAMS, channelmax=DEFAULT_CHANNELMAX, framemax=0, heartbeat=0, connect_timeout=DEFAULT_CONNECT_TIMEOUT)
-    @logmsg("connecting to $(host):$(port)$(virtualhost)")
-    conn = Connection(virtualhost, host, port)
-    chan = channel(conn, DEFAULT_CHANNEL, true)
+function connection(;virtualhost="/", host="localhost", port=AMQPClient.AMQP_DEFAULT_PORT, auth_params=AMQPClient.DEFAULT_AUTH_PARAMS, channelmax=AMQPClient.DEFAULT_CHANNELMAX, framemax=0, heartbeat=0, connect_timeout=AMQPClient.DEFAULT_CONNECT_TIMEOUT)
+    @debug "connecting to $(host):$(port)$(virtualhost)"
+    conn = AMQPClient.Connection(virtualhost, host, port)
+    chan = channel(conn, AMQPClient.DEFAULT_CHANNEL, true)
 
     # setup handler for Connection.Start
     ctx = Dict(:auth_params=>auth_params, :channelmax=>channelmax, :framemax=>framemax, :heartbeat=>heartbeat)
-    handle(chan, :Connection, :Start, on_connection_start, ctx)
+    AMQPClient.handle(chan, :Connection, :Start, AMQPClient.on_connection_start, ctx)
 
     # open socket and start processor tasks
-    conn.sock = Nullable(connect(conn.host, conn.port))
-    conn.sender = @async connection_processor(conn, "ConnectionSender", connection_sender)
-    conn.receiver = @async connection_processor(conn, "ConnectionReceiver", connection_receiver)
-    chan.receiver = @async connection_processor(chan, "ChannelReceiver($(chan.id))", channel_receiver)
+    conn.sock = connect(conn.host, conn.port)
+    conn.sender = @async   AMQPClient.connection_processor(conn, "ConnectionSender", AMQPClient.connection_sender)
+    conn.receiver = @async AMQPClient.connection_processor(conn, "ConnectionReceiver", AMQPClient.connection_receiver)
+    chan.receiver = @async AMQPClient.connection_processor(chan, "ChannelReceiver($(chan.id))", AMQPClient.channel_receiver)
 
     # initiate handshake
-    conn.state = chan.state = CONN_STATE_OPENING
-    write(sock(chan), ProtocolHeader)
+    conn.state = chan.state = AMQPClient.CONN_STATE_OPENING
+    write(AMQPClient.sock(chan), AMQPClient.ProtocolHeader)
 
-    if !wait_for_state(conn, CONN_STATE_OPEN; timeout=connect_timeout) || !wait_for_state(chan, CONN_STATE_OPEN; timeout=connect_timeout)
+    if !AMQPClient.wait_for_state(conn, AMQPClient.CONN_STATE_OPEN; timeout=connect_timeout) || !AMQPClient.wait_for_state(chan, AMQPClient.CONN_STATE_OPEN; timeout=connect_timeout)
         throw(AMQPClientException("Connection handshake failed"))
     end
     chan
@@ -569,7 +569,7 @@ function close(conn::Connection, handshake::Bool=true, by_peer::Bool=false, repl
 
     if !handshake || by_peer
         # close socket
-        close(get(conn.sock))
+        close(conn.sock)
         conn.sock = nothing
 
         # reset all members
@@ -616,9 +616,9 @@ const EXCHANGE_TYPE_HEADERS = "headers"    # optional, must test before typing t
 default_exchange_name(excg_type) = ("amq." * excg_type)
 default_exchange_name() = ""
 
-function _wait_resp{T}(sendmethod, chan::MessageChannel, default_result::T, 
+function _wait_resp(sendmethod, chan::MessageChannel, default_result::T, 
         nowait::Bool=true, resp_handler=nothing, resp_class=nothing, resp_meth=nothing,
-        timeout_result::T=default_result, timeout::Int=DEFAULT_TIMEOUT)
+        timeout_result::T=default_result, timeout::Int=DEFAULT_TIMEOUT) where {T}
     result = default_result
     if !nowait
         reply = Channel{T}(1)
@@ -644,7 +644,7 @@ function exchange_declare(chan::MessageChannel, name::String, typ::String;
         arguments::Dict{String,Any}=Dict{String,Any}())
     (isempty(name) || startswith(name, "amq.")) && !passive && throw(AMQPClientException("Exchange name '$name' is reserved. Use a different name."))
     if auto_delete
-        @logmsg("Warning: auto_delete exchange types are deprecated")
+        @debug("Warning: auto_delete exchange types are deprecated")
     end
 
     _wait_resp(chan, true, nowait, on_exchange_declare_ok, :Exchange, :DeclareOk, false, timeout) do
@@ -811,7 +811,7 @@ function basic_publish(chan::MessageChannel, msg::Message; exchange::String="", 
     send_basic_publish(chan, msg, exchange, routing_key, mandatory, immediate)
 end
 
-const GET_EMPTY_RESP = Nullable{Message}()
+const GET_EMPTY_RESP = nothing
 function basic_get(chan::MessageChannel, queue::String, no_ack::Bool)
     send_basic_get(chan, queue, no_ack)
     take!(chan.chan_get)
@@ -850,12 +850,12 @@ end
 # ----------------------------------------
 
 function on_unexpected_message(c::MessageChannel, m::TAMQPMethodFrame, ctx)
-    @logmsg("Unexpected message on channel $(c.id): class:$(m.payload.class), method:$(m.payload.method)")
+    @debug("Unexpected message on channel $(c.id): class:$(m.payload.class), method:$(m.payload.method)")
     nothing
 end
 
 function on_unexpected_message(c::MessageChannel, f, ctx)
-    @logmsg("Unexpected message on channel $(c.id): frame type: $(f.hdr)")
+    @debug("Unexpected message on channel $(c.id): frame type: $(f.hdr)")
     nothing
 end
 
@@ -879,7 +879,7 @@ end
 function _send_close(context_class::Symbol, chan::MessageChannel, reply_code=ReplySuccess, reply_text="", class_id=0, method_id=0)
     chan.closereason = CloseReason(TAMQPReplyCode(reply_code), TAMQPReplyText(reply_text), TAMQPClassId(class_id), TAMQPMethodId(method_id))
     if context_class === :Channel && chan.id == DEFAULT_CHANNEL
-        @logmsg("closing channel 0 is equivalent to closing the connection!")
+        @debug("closing channel 0 is equivalent to closing the connection!")
         context_class = :Connection
     end
     context_chan_id = context_class === :Connection ? 0 : chan.id
@@ -928,7 +928,7 @@ function on_connection_start(chan::MessageChannel, m::TAMQPMethodFrame, ctx)
     server_props = convert(Dict{String,Any}, get_property(chan, :ServerProperties, Dict{String,Any}()))
     if "capabilities" in keys(server_props)
         for f in server_props["capabilities"].fld.data
-            conn.capabilities[String(f.name)] = f.val.fld
+            conn.capabilities[convert(String, f.name)] = f.val.fld
         end
     end
 
@@ -947,19 +947,19 @@ function send_connection_start_ok(chan::MessageChannel, auth_params::Dict{String
     client_props = copy(CLIENT_IDENTIFICATION)
     client_cap = client_props["capabilities"]
     server_cap = conn.capabilities
-    @logmsg("server capabilities: $server_cap")
+    @debug("server capabilities: $server_cap")
     if "consumer_cancel_notify" in keys(server_cap)
         client_cap["consumer_cancel_notify"] = server_cap["consumer_cancel_notify"]
     end
     if "connection.blocked" in keys(server_cap)
         client_cap["connection.blocked"] = server_cap["connection.blocked"]
     end
-    @logmsg("client_props: $(client_props)")
+    @debug("client_props: $(client_props)")
 
     # assert that auth mechanism is supported
     mechanism = auth_params["MECHANISM"]
     mechanisms = split(get_property(chan, :Mechanisms, ""), ' ')
-    @logmsg("mechanism: $mechanism, supported mechanisms: $(mechanisms)")
+    @debug("mechanism: $mechanism, supported mechanisms: $(mechanisms)")
     @assert mechanism in mechanisms
 
     # set up locale
@@ -967,14 +967,14 @@ function send_connection_start_ok(chan::MessageChannel, auth_params::Dict{String
     if isempty(client_locale)
         # pick up one of the server locales
         locales = split(get_property(chan, :Locales, ""), ' ')
-        @logmsg("supported locales: $(locales)")
+        @debug("supported locales: $(locales)")
         client_locale = locales[1]
     end
-    @logmsg("client_locale: $(client_locale)")
+    @debug("client_locale: $(client_locale)")
 
     # respond to login
     auth_resp = AUTH_PROVIDERS[mechanism](auth_params)
-    @logmsg("auth_resp: $(auth_resp)")
+    @debug("auth_resp: $(auth_resp)")
 
     send(chan, TAMQPMethodPayload(:Connection, :StartOk, (client_props, mechanism, auth_resp, client_locale)))
     nothing
@@ -1010,7 +1010,7 @@ function send_connection_tune_ok(chan::MessageChannel, channelmax=0, framemax=0,
         conn.heartbeat = max(conn.heartbeat, heartbeat)
     end
 
-    @logmsg("channelmax: $(conn.channelmax), framemax: $(conn.framemax), heartbeat: $(conn.heartbeat)")
+    @debug("channelmax: $(conn.channelmax), framemax: $(conn.framemax), heartbeat: $(conn.heartbeat)")
     send(chan, TAMQPMethodPayload(:Connection, :TuneOk, (conn.channelmax, conn.framemax, conn.heartbeat)))
 
     # start heartbeat timer
@@ -1058,7 +1058,7 @@ end
 function on_channel_flow(chan::MessageChannel, m::TAMQPMethodFrame, ctx)
     @assert is_method(m, :Channel, ctx)
     chan.flow = m.payload.fields[1].second
-    @logmsg("channel $(chan.id) flow is now $(chan.flow)")
+    @debug("channel $(chan.id) flow is now $(chan.flow)")
     nothing
 end
 
@@ -1126,7 +1126,7 @@ send_basic_consume(chan::MessageChannel, queue::String, consumer_tag::String, no
 
 send_basic_cancel(chan::MessageChannel, consumer_tag::String, nowait::Bool) = send(chan, TAMQPMethodPayload(:Basic, :Cancel, (consumer_tag, nowait)))
 send_basic_publish(chan::MessageChannel, msg::Message, exchange::String, routing_key::String, mandatory::Bool=false, immediate::Bool=false) =
-    send(chan, TAMQPMethodPayload(:Basic, :Publish, (0, exchange, routing_key, mandatory, immediate)), Nullable(msg))
+    send(chan, TAMQPMethodPayload(:Basic, :Publish, (0, exchange, routing_key, mandatory, immediate)), msg)
 send_basic_get(chan::MessageChannel, queue::String, no_ack::Bool) = send(chan, TAMQPMethodPayload(:Basic, :Get, (0, queue, no_ack)))
 send_basic_ack(chan::MessageChannel, delivery_tag::TAMQPDeliveryTag, all_upto::Bool) = send(chan, TAMQPMethodPayload(:Basic, :Ack, (delivery_tag, all_upto)))
 send_basic_reject(chan::MessageChannel, delivery_tag::TAMQPDeliveryTag, requeue::Bool) = send(chan, TAMQPMethodPayload(:Basic, :Reject, (delivery_tag, requeue)))
@@ -1175,7 +1175,7 @@ end
 function on_channel_message_in(chan::MessageChannel, m::TAMQPContentHeaderFrame, ctx)
     msg = chan.partial_msgs[1]
     msg.properties = m.hdrpayload.proplist
-    msg.data = Array{UInt8}(m.hdrpayload.bodysize)
+    msg.data = Vector{UInt8}(uninitialized, m.hdrpayload.bodysize)
     msg.filled = 0
     nothing
 end
@@ -1191,11 +1191,11 @@ function on_channel_message_in(chan::MessageChannel, m::TAMQPContentBodyFrame, c
     if msg.filled >= length(msg.data)
         # got all data for msg
         if isempty(msg.consumer_tag)
-            put!(chan.chan_get, Nullable(shift!(chan.partial_msgs)))
+            put!(chan.chan_get, shift!(chan.partial_msgs))
         elseif msg.consumer_tag in keys(chan.consumers)
             put!(chan.consumers[msg.consumer_tag].recvq, shift!(chan.partial_msgs))
         else
-            @logmsg("discarding message, no consumer with tag $(msg.consumer_tag)")
+            @debug("discarding message, no consumer with tag $(msg.consumer_tag)")
         end
     end
 

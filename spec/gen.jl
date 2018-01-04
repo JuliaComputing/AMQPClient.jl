@@ -116,7 +116,7 @@ function gen_spec(specfile)
             methidx = parse(Int, attribute(meth, "index"))
             methargs = Pair{Symbol,Type}[]
             methrespelem = find_element(meth, "response")
-            methresp = (methrespelem === nothing) ? :Void : Symbol(name2sym(attribute(methrespelem, "name")))
+            methresp = (methrespelem === nothing) ? :Nothing : Symbol(name2sym(attribute(methrespelem, "name")))
             println(methindent, methsep, "$methidx => MethodSpec($methidx, :$methname, :$methresp, Pair{Symbol,DataType}[")
             isempty(methsep) && (methsep = ", ")
 

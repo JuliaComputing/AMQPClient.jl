@@ -6,18 +6,12 @@ using Compat
 using Base.I18n
 import Base: write, read, read!, close, convert, show, isopen
 
+if !isdefined(Base, Symbol("@debug"))
 # enable logging only during debugging
-#using Logging
-#function __init__()
-#    #Logging.configure(filename="AMQPClient.log", level=DEBUG)
-#    Logging.configure(level=DEBUG)
-#end
-#macro logmsg(s)
-#    quote
-#        debug("[", myid(), "-", "] ", $(esc(s)))
-#    end
-#end
-macro logmsg(s)
+const DEBUG = true
+macro debug(s)
+    esc(:(DEBUG && println("[ Debug: ", $s)))
+end
 end
 
 # Client property info that gets sent to the server on connection startup
