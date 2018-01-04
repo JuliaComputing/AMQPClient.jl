@@ -877,7 +877,7 @@ function _on_close_ok(context_class::Symbol, chan::MessageChannel, m::TAMQPMetho
 end
 
 function _send_close(context_class::Symbol, chan::MessageChannel, reply_code=ReplySuccess, reply_text="", class_id=0, method_id=0)
-    chan.closereason = CloseReason(TAMQPReplyCode(reply_code), TAMQPReplyText(reply_text), TAMQPClassId(class_id), TAMQPMethodId(method_id))
+    chan.closereason = CloseReason(TAMQPReplyCode(reply_code), convert(TAMQPReplyText, reply_text), TAMQPClassId(class_id), TAMQPMethodId(method_id))
     if context_class === :Channel && chan.id == DEFAULT_CHANNEL
         @debug("closing channel 0 is equivalent to closing the connection!")
         context_class = :Connection
@@ -888,7 +888,7 @@ function _send_close(context_class::Symbol, chan::MessageChannel, reply_code=Rep
 end
 
 _send_close(context_class::Symbol, context_chan_id, conn::Connection, reply_code=ReplySuccess, reply_text="", class_id=0, method_id=0, chan_id=0) =
-    send(conn, TAMQPMethodFrame(TAMQPFrameProperties(context_chan_id,0), TAMQPMethodPayload(context_class, :Close, (TAMQPReplyCode(reply_code), TAMQPReplyText(reply_text), TAMQPClassId(class_id), TAMQPMethodId(method_id)))))
+    send(conn, TAMQPMethodFrame(TAMQPFrameProperties(context_chan_id,0), TAMQPMethodPayload(context_class, :Close, (TAMQPReplyCode(reply_code), convert(TAMQPReplyText, reply_text), TAMQPClassId(class_id), TAMQPMethodId(method_id)))))
 
 send_connection_close_ok(chan::MessageChannel) = _send_close_ok(:Connection, chan)
 on_connection_close_ok(chan::MessageChannel, m::TAMQPMethodFrame, ctx) = _on_close_ok(:Connection, chan, m, ctx)
@@ -1191,9 +1191,9 @@ function on_channel_message_in(chan::MessageChannel, m::TAMQPContentBodyFrame, c
     if msg.filled >= length(msg.data)
         # got all data for msg
         if isempty(msg.consumer_tag)
-            put!(chan.chan_get, shift!(chan.partial_msgs))
+            put!(chan.chan_get, popfirst!(chan.partial_msgs))
         elseif msg.consumer_tag in keys(chan.consumers)
-            put!(chan.consumers[msg.consumer_tag].recvq, shift!(chan.partial_msgs))
+            put!(chan.consumers[msg.consumer_tag].recvq, popfirst!(chan.partial_msgs))
         else
             @debug("discarding message, no consumer with tag $(msg.consumer_tag)")
         end

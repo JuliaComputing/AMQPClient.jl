@@ -17,6 +17,10 @@ else
     # Base.CoreLogging.global_logger(Base.CoreLogging.SimpleLogger(STDERR, Base.CoreLogging.Debug))
 end
 
+if !isdefined(Base, :popfirst!)
+    const popfirst! = shift!
+end
+
 # Client property info that gets sent to the server on connection startup
 const CLIENT_IDENTIFICATION = Dict{String,Any}(
     "product" => "Julia AMQPClient",
