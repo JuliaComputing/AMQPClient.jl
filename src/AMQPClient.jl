@@ -7,11 +7,14 @@ using Base.I18n
 import Base: write, read, read!, close, convert, show, isopen
 
 if !isdefined(Base, Symbol("@debug"))
-# enable logging only during debugging
-const DEBUG = true
+# 0.6: enable logging only during debugging
+const DEBUG = false
 macro debug(s)
     esc(:(DEBUG && println("[ Debug: ", $s)))
 end
+else
+    # 0.7: use builtin logging by enabling following statement
+    # Base.CoreLogging.global_logger(Base.CoreLogging.SimpleLogger(STDERR, Base.CoreLogging.Debug))
 end
 
 # Client property info that gets sent to the server on connection startup
