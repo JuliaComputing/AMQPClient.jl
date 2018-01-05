@@ -6,18 +6,19 @@ using Compat
 using Base.I18n
 import Base: write, read, read!, close, convert, show, isopen
 
-# enable logging only during debugging
-#using Logging
-#function __init__()
-#    #Logging.configure(filename="AMQPClient.log", level=DEBUG)
-#    Logging.configure(level=DEBUG)
-#end
-#macro logmsg(s)
-#    quote
-#        debug("[", myid(), "-", "] ", $(esc(s)))
-#    end
-#end
-macro logmsg(s)
+if !isdefined(Base, Symbol("@debug"))
+# 0.6: enable logging only during debugging
+const DEBUG = false
+macro debug(s)
+    esc(:(DEBUG && println("[ Debug: ", $s)))
+end
+else
+    # 0.7: use builtin logging by enabling following statement
+    # Base.CoreLogging.global_logger(Base.CoreLogging.SimpleLogger(STDERR, Base.CoreLogging.Debug))
+end
+
+if !isdefined(Base, :popfirst!)
+    const popfirst! = shift!
 end
 
 # Client property info that gets sent to the server on connection startup

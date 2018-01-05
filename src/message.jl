@@ -1,4 +1,4 @@
-immutable PropertySpec
+struct PropertySpec
     name::Symbol
     typ::Type
     mask::UInt16
@@ -27,7 +27,7 @@ const PROPERTIES = Dict{Symbol, PropertySpec}(
 const SORTED_PROPERTY_NAMES = [:content_type, :content_encoding, :headers, :delivery_mode, :priority, :correlation_id, :reply_to, :expiration, :message_id, :timestamp, :message_type, :user_id, :app_id, :cluster_id]
 const SORTED_PROPERTIES = [PROPERTIES[k] for k in SORTED_PROPERTY_NAMES]
 
-type Message
+mutable struct Message
     data::Vector{UInt8}
     properties::Dict{Symbol,TAMQPField}
 
