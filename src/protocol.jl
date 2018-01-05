@@ -40,7 +40,12 @@ function read(io::IO, ::Type{TAMQPLongStr})
     TAMQPLongStr(len, read!(io, Vector{UInt8}(uninitialized, len)))
 end
 
-write(io::IO, s::T) where {T<:Union{TAMQPShortStr,TAMQPLongStr}} = write(io, hton(s.len), s.data)
+function read(io::IO, ::Type{TAMQPByteArray})
+    len = ntoh(read(io, TAMQPLongUInt))
+    TAMQPByteArray(len, read!(io, Vector{UInt8}(uninitialized, len)))
+end
+
+write(io::IO, s::T) where {T<:Union{TAMQPShortStr,TAMQPLongStr,TAMQPByteArray}} = write(io, hton(s.len), s.data)
 
 function read(io::IO, ::Type{TAMQPFieldValue})
     c = read(io, Char)

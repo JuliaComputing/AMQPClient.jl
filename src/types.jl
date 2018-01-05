@@ -53,6 +53,11 @@ struct TAMQPLongStr <: TAMQPLengthPrefixed
     data::Vector{UInt8}
 end
 
+struct TAMQPByteArray <: TAMQPLengthPrefixed
+    len::TAMQPLongUInt
+    data::Vector{UInt8}
+end
+
 const TAMQPFieldName = TAMQPShortStr
 const TAMQPFV = Union{Real, TAMQPDecimalValue, TAMQPLengthPrefixed, Nothing}
 
@@ -93,7 +98,7 @@ const FieldValueIndicatorMap = Dict{Char,DataType}(
     'D' => TAMQPDecimalValue,
     's' => TAMQPShortUInt,
     'S' => TAMQPLongStr,
-    # 'x' => TAMQPLongStr,
+    'x' => TAMQPByteArray,
     'A' => TAMQPFieldArray,
     'T' => TAMQPTimeStamp,
     'F' => TAMQPFieldTable,

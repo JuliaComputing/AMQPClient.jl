@@ -1,7 +1,8 @@
-convert(::Type{Any}, s::T)            where {T<:Union{TAMQPShortStr,TAMQPLongStr}} = convert(String, s)
-convert(::Type{String}, s::T)         where {T<:Union{TAMQPShortStr,TAMQPLongStr}} = String(convert(Vector{UInt8}, s.data))
-convert(::Type{T}, s::AbstractString) where {T<:Union{TAMQPShortStr,TAMQPLongStr}} = T(length(s), Vector{UInt8}(s))
+convert(::Type{Any}, s::T)            where {T<:Union{TAMQPShortStr,TAMQPLongStr,TAMQPByteArray}} = convert(String, s)
+convert(::Type{String}, s::T)         where {T<:Union{TAMQPShortStr,TAMQPLongStr,TAMQPByteArray}} = String(convert(Vector{UInt8}, s.data))
+convert(::Type{T}, s::AbstractString) where {T<:Union{TAMQPShortStr,TAMQPLongStr,TAMQPByteArray}} = T(length(s), Vector{UInt8}(s))
 convert(::Type{TAMQPLongStr}, d::Vector{UInt8}) = TAMQPLongStr(length(d), d)
+convert(::Type{TAMQPByteArray}, d::Vector{UInt8}) = TAMQPByteArray(length(d), d)
 
 convert(::Type{TAMQPFieldValue{T}}, v::T) where {T} = TAMQPFieldValue{T}(FieldIndicatorMap[T], v)
 
