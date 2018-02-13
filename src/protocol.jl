@@ -110,9 +110,9 @@ end
 
 write(io::IO, f::TAMQPGenericFrame) = write(io, hton(f.hdr), f.props, f.payload, f.fend)
 
-"""
-Given a generic frame, convert it to appropriate exact frame type.
-"""
+# """
+# Given a generic frame, convert it to appropriate exact frame type.
+# """
 #function narrow_frame(f::TAMQPGenericFrame)
 #    if f.hdr == FrameMethod
 #        return TAMQPMethodFrame(f)
@@ -968,13 +968,10 @@ function send_connection_start_ok(chan::MessageChannel, auth_params::Dict{String
     @assert mechanism in mechanisms
 
     # set up locale
-    client_locale = locale()
-    if isempty(client_locale)
-        # pick up one of the server locales
-        locales = split(get_property(chan, :Locales, ""), ' ')
-        @debug("supported locales: $(locales)")
-        client_locale = locales[1]
-    end
+    # pick up one of the server locales
+    locales = split(get_property(chan, :Locales, ""), ' ')
+    @debug("supported locales: $(locales)")
+    client_locale = locales[1]
     @debug("client_locale: $(client_locale)")
 
     # respond to login
