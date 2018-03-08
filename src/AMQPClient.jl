@@ -3,7 +3,9 @@ module AMQPClient
 
 using Compat
 import Base: write, read, read!, close, convert, show, isopen
-
+@static if VERSION >= v"0.7.0-DEV.4442"
+    using Sockets
+end
 const DEBUG = false
 
 if !isdefined(Base, Symbol("@debug"))
@@ -13,7 +15,7 @@ macro debug(s)
 end
 else
     # 0.7: use builtin logging by enabling following statement
-    # Base.CoreLogging.global_logger(Base.CoreLogging.SimpleLogger(STDERR, Base.CoreLogging.Debug))
+    # using Logging; Logging.global_logger(Logging.ConsoleLogger(stderr, Logging.Debug))
 macro debug(s)
     esc(:(DEBUG && Base.@debug($s)))
 end
