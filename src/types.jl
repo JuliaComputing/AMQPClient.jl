@@ -45,7 +45,7 @@ end
 
 struct TAMQPShortStr <: TAMQPLengthPrefixed
     len::TAMQPOctet
-    data::Vector{Int8}
+    data::Vector{UInt8}
 end
 
 struct TAMQPLongStr <: TAMQPLengthPrefixed

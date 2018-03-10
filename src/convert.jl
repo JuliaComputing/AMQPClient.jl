@@ -12,6 +12,7 @@ as_fval(v::String) = convert(TAMQPFieldValue{TAMQPLongStr}, convert(TAMQPLongStr
 
 convert(::Type{Any}, t::TAMQPFieldTable) = convert(Dict{Any,Any}, t)
 convert(::Type{Dict{K,V}}, t::TAMQPFieldTable) where {K, V} = Dict{K,V}(f.name => f.val for f in t.data)
+convert(::Type{Dict{String, String}}, t::TAMQPFieldTable) = Dict{String, String}(String(f.name.data) => String(f.val.fld.data) for f in t.data)
 function convert(::Type{TAMQPFieldTable}, d::Dict{String,Any})
     data = TAMQPFieldValuePair[]
     for (n,v) in d
