@@ -32,17 +32,17 @@ write(io::IO, b::TAMQPBodyPayload) = write(io, b.data)
 
 function read(io::IO, ::Type{TAMQPShortStr})
     len = ntoh(read(io, TAMQPOctet))
-    TAMQPShortStr(len, read!(io, Vector{UInt8}(uninitialized, len)))
+    TAMQPShortStr(len, read!(io, Vector{UInt8}(undef, len)))
 end
 
 function read(io::IO, ::Type{TAMQPLongStr})
     len = ntoh(read(io, TAMQPLongUInt))
-    TAMQPLongStr(len, read!(io, Vector{UInt8}(uninitialized, len)))
+    TAMQPLongStr(len, read!(io, Vector{UInt8}(undef, len)))
 end
 
 function read(io::IO, ::Type{TAMQPByteArray})
     len = ntoh(read(io, TAMQPLongUInt))
-    TAMQPByteArray(len, read!(io, Vector{UInt8}(uninitialized, len)))
+    TAMQPByteArray(len, read!(io, Vector{UInt8}(undef, len)))
 end
 
 write(io::IO, s::T) where {T<:Union{TAMQPShortStr,TAMQPLongStr,TAMQPByteArray}} = write(io, hton(s.len), s.data)
@@ -63,7 +63,7 @@ write(io::IO, fv::TAMQPFieldValuePair) = write(io, fv.name, fv.val)
 function read(io::IO, ::Type{TAMQPFieldTable})
     len = ntoh(read(io, fieldtype(TAMQPFieldTable, :len)))
     @debug("read fieldtable length $(len)")
-    buff = read!(io, Vector{UInt8}(uninitialized, len))
+    buff = read!(io, Vector{UInt8}(undef, len))
     data = TAMQPFieldValuePair[]
     iob = IOBuffer(buff)
     while !eof(iob)
@@ -102,7 +102,7 @@ function read(io::IO, ::Type{TAMQPGenericFrame})
     @assert hdr in (1,2,3,8)
     props = read(io, fieldtype(TAMQPGenericFrame, :props))
     @debug("reading generic frame type:$hdr, channel:$(props.channel), payloadsize:$(props.payloadsize)")
-    payload = read!(io, TAMQPBodyPayload(Vector{TAMQPOctet}(uninitialized, props.payloadsize)))
+    payload = read!(io, TAMQPBodyPayload(Vector{TAMQPOctet}(undef, props.payloadsize)))
     fend = ntoh(read(io, fieldtype(TAMQPGenericFrame, :fend)))
     @assert fend == FrameEnd
     TAMQPGenericFrame(hdr, props, payload, fend)
@@ -1177,7 +1177,7 @@ end
 function on_channel_message_in(chan::MessageChannel, m::TAMQPContentHeaderFrame, ctx)
     msg = chan.partial_msgs[1]
     msg.properties = m.hdrpayload.proplist
-    msg.data = Vector{UInt8}(uninitialized, m.hdrpayload.bodysize)
+    msg.data = Vector{UInt8}(undef, m.hdrpayload.bodysize)
     msg.filled = 0
     nothing
 end

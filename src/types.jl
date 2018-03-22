@@ -141,7 +141,7 @@ struct TAMQPMethodPayload
         class = ntoh(read(io, TAMQPClassId))
         method = ntoh(read(io, TAMQPMethodId))
         args = methodargs(class, method)
-        fields = Vector{Pair{Symbol,TAMQPField}}(uninitialized, length(args))
+        fields = Vector{Pair{Symbol,TAMQPField}}(undef, length(args))
         @debug("reading method payload class:$class, method:$method, nargs:$(length(args))")
         bitpos = 0
         bitval = TAMQPBit(0)
