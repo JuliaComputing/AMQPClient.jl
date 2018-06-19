@@ -628,7 +628,12 @@ function _wait_resp(sendmethod, chan::MessageChannel, default_result::T,
     if !nowait
         reply = Channel{T}(1)
         # timer to time the request out, in case of an error
-        t = Timer((t)->try put!(reply, timeout_result) end, timeout)
+        t = Timer(timeout) do t
+            try
+                put!(reply, timeout_result)
+            catch
+            end
+        end
         # register a callback
         handle(chan, resp_class, resp_meth, resp_handler, reply)
     end
