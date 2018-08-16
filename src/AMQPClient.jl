@@ -1,28 +1,15 @@
-__precompile__(true)
 module AMQPClient
 
-using Compat
 import Base: write, read, read!, close, convert, show, isopen
-@static if VERSION >= v"0.7.0-DEV.4442"
-    using Sockets
-end
+
+using Sockets
+
 const DEBUG = false
 
-if !isdefined(Base, Symbol("@debug"))
-# 0.6: enable logging only during debugging
-macro debug(s)
-    esc(:(DEBUG && println("[ Debug: ", $s)))
-end
-else
-    # 0.7: use builtin logging by enabling following statement
-    # using Logging; Logging.global_logger(Logging.ConsoleLogger(stderr, Logging.Debug))
+# 0.7: use builtin logging by enabling following statement
+# using Logging; Logging.global_logger(Logging.ConsoleLogger(stderr, Logging.Debug))
 macro debug(s)
     esc(:(DEBUG && Base.@debug($s)))
-end
-end
-
-if !isdefined(Base, :popfirst!)
-    const popfirst! = shift!
 end
 
 # Client property info that gets sent to the server on connection startup

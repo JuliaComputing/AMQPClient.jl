@@ -4,7 +4,7 @@ sudo: required
 os:
   - linux
 julia:
-  - 0.6
+  - 1
   - nightly
 services:
   - rabbitmq
@@ -13,9 +13,9 @@ notifications:
 # uncomment the following lines to override the default test script
 script:
   - if [[ -a .git/shallow ]]; then git fetch --unshallow; fi
-  - julia --inline=no -e 'Pkg.clone(pwd()); Pkg.build("AMQPClient"); Pkg.test("AMQPClient"; coverage=true)'
+  - julia --inline=no -e 'using Pkg; Pkg.clone(pwd()); Pkg.build("AMQPClient"); Pkg.test("AMQPClient"; coverage=true)'
 after_success:
   # push coverage results to Coveralls
-  - julia -e 'cd(Pkg.dir("AMQPClient")); Pkg.add("Coverage"); using Coverage; Coveralls.submit(Coveralls.process_folder())'
+  - julia -e 'cd(using Pkg; Pkg.dir("AMQPClient")); Pkg.add("Coverage"); using Coverage; Coveralls.submit(Coveralls.process_folder())'
   # push coverage results to Codecov
-  - julia -e 'cd(Pkg.dir("AMQPClient")); Pkg.add("Coverage"); using Coverage; Codecov.submit(Codecov.process_folder())'
+  - julia -e 'cd(using Pkg; Pkg.dir("AMQPClient")); Pkg.add("Coverage"); using Coverage; Codecov.submit(Codecov.process_folder())'
