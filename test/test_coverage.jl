@@ -68,7 +68,7 @@ function runtests(;virtualhost="/", host="localhost", port=AMQPClient.AMQP_DEFAU
         @test rcvd_msg.routing_key == ROUTE1
         @test rcvd_msg.data == M.data
         @test :content_type in keys(rcvd_msg.properties)
-        @test String(rcvd_msg.properties[:content_type]) == "text/plain"
+        @test convert(String, rcvd_msg.properties[:content_type]) == "text/plain"
     end
 
     # basic get returns null if no more messages

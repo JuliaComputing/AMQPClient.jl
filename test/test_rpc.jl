@@ -110,8 +110,8 @@ function test_rpc_server(;virtualhost="/", host="localhost", port=AMQPClient.AMQ
         rpc_count += 1
 
         @test :reply_to in keys(rcvd_msg.properties)
-        reply_to = String(rcvd_msg.properties[:reply_to])
-        correlation_id = String(rcvd_msg.properties[:correlation_id])
+        reply_to = convert(String, rcvd_msg.properties[:reply_to])
+        correlation_id = convert(String, rcvd_msg.properties[:correlation_id])
 
         resp_str = "$(my_server_id) received msg $(rpc_count) - $(reply_to): $(String(rcvd_msg.data))"
         println("server ", resp_str)
