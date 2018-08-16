@@ -48,7 +48,7 @@ function runtests(;virtualhost="/", host="localhost", port=AMQPClient.AMQP_DEFAU
     # rabbitmq 3.6.5 does not support qos
     # basic_qos(chan1, 1024*10, 10, false)
 
-    M = Message(convert(Vector{UInt8}, "hello world"), content_type="text/plain", delivery_mode=PERSISTENT)
+    M = Message(codeunits("hello world"), content_type="text/plain", delivery_mode=PERSISTENT)
 
     testlog("testing basic publish and get...")
     # publish 10 messages
@@ -68,7 +68,7 @@ function runtests(;virtualhost="/", host="localhost", port=AMQPClient.AMQP_DEFAU
         @test rcvd_msg.routing_key == ROUTE1
         @test rcvd_msg.data == M.data
         @test :content_type in keys(rcvd_msg.properties)
-        @test convert(String, rcvd_msg.properties[:content_type]) == "text/plain"
+        @test String(rcvd_msg.properties[:content_type]) == "text/plain"
     end
 
     # basic get returns null if no more messages
