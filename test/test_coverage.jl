@@ -1,15 +1,8 @@
 module AMQPTestCoverage
 
-using AMQPClient
-@static if VERSION < v"0.7.0-DEV.2005"
-    using Base.Test
-else
-    using Test
-end
+using AMQPClient, Test, Random
 
-@static if isdefined(Sys, :BINDIR)
-    const JULIA_HOME = Sys.BINDIR
-end
+const JULIA_HOME = Sys.BINDIR
 
 const EXCG_DIRECT = "ExcgDirect"
 const EXCG_FANOUT = "ExcgFanout"

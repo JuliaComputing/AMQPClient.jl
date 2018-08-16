@@ -4,7 +4,7 @@ sudo: required
 os:
   - linux
 julia:
-  - 1
+  - 1.0
   - nightly
 services:
   - rabbitmq
