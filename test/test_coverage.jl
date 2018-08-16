@@ -48,7 +48,7 @@ function runtests(;virtualhost="/", host="localhost", port=AMQPClient.AMQP_DEFAU
     # rabbitmq 3.6.5 does not support qos
     # basic_qos(chan1, 1024*10, 10, false)
 
-    M = Message(codeunits("hello world"), content_type="text/plain", delivery_mode=PERSISTENT)
+    M = Message(Vector{UInt8}("hello world"), content_type="text/plain", delivery_mode=PERSISTENT)
 
     testlog("testing basic publish and get...")
     # publish 10 messages

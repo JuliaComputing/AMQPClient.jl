@@ -50,7 +50,7 @@ function test_rpc_client(;virtualhost="/", host="localhost", port=AMQPClient.AMQ
     # publish NRPC_MSGS messages to the queue
     while correlation_id < NRPC_MSGS
         correlation_id += 1
-        M = Message(codeunits("hello from " * queue_name), content_type="text/plain", delivery_mode=PERSISTENT, reply_to=queue_name, correlation_id=string(correlation_id))
+        M = Message(Vector{UInt8}("hello from " * queue_name), content_type="text/plain", delivery_mode=PERSISTENT, reply_to=queue_name, correlation_id=string(correlation_id))
         basic_publish(chan1, M; exchange=default_exchange_name(), routing_key=QUEUE_RPC)
         # sleep a random time between 1 and 5 seconds between requests
         sleep(rand())
@@ -116,7 +116,7 @@ function test_rpc_server(;virtualhost="/", host="localhost", port=AMQPClient.AMQ
         resp_str = "$(my_server_id) received msg $(rpc_count) - $(reply_to): $(String(rcvd_msg.data))"
         println("server ", resp_str)
 
-        M = Message(codeunits(resp_str), content_type="text/plain", delivery_mode=PERSISTENT, correlation_id=correlation_id)
+        M = Message(Vector{UInt8}(resp_str), content_type="text/plain", delivery_mode=PERSISTENT, correlation_id=correlation_id)
         basic_publish(chan1, M; exchange=default_exchange_name(), routing_key=reply_to)
 
         basic_ack(chan1, rcvd_msg.delivery_tag)
