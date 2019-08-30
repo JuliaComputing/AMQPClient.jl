@@ -28,7 +28,7 @@ Attaching to an existing queue also returns the number of pending messages and t
 
 ````julia
 QUEUE1 = "MyQueue"
-success, message_count, consumer_count = queue_declare(chan1, QUEUE1)
+success, queue_name, message_count, consumer_count = queue_declare(chan1, QUEUE1)
 success || println("error!")
 
 # operate with the queue
@@ -64,3 +64,4 @@ else
     println("error!")
 end
 ````
+

@@ -27,7 +27,7 @@ function setup(;virtualhost="/", host="localhost", port=AMQPClient.AMQP_DEFAULT_
 
     # create and bind queues
     testlog("creating queues...")
-    success, message_count, consumer_count = queue_declare(chan1, QUEUE1)
+    success, name, message_count, consumer_count = queue_declare(chan1, QUEUE1)
     @test success
     @test message_count == 0
 

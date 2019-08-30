@@ -38,7 +38,7 @@ function runtests(;virtualhost="/", host="localhost", port=AMQPClient.AMQP_DEFAU
 
     # create and bind queues
     testlog("creating queues...")
-    success, message_count, consumer_count = queue_declare(chan1, QUEUE1)
+    success, queue_name, message_count, consumer_count = queue_declare(chan1, QUEUE1)
     @test success
     @test message_count == 0
     @test consumer_count == 0
@@ -204,3 +204,4 @@ function test_types()
 end
 
 end # module AMQPTestCoverage
+
