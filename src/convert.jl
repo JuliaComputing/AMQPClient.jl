@@ -1,5 +1,5 @@
 convert(::Type{Any}, s::T)            where {T<:Union{TAMQPShortStr,TAMQPLongStr,TAMQPByteArray}} = convert(String, s)
-convert(::Type{String}, s::T)         where {T<:Union{TAMQPShortStr,TAMQPLongStr,TAMQPByteArray}} = String(convert(Vector{UInt8}, s.data))
+convert(::Type{String}, s::T)         where {T<:Union{TAMQPShortStr,TAMQPLongStr,TAMQPByteArray}} = String(copy(convert(Vector{UInt8}, s.data)))
 convert(::Type{T}, s::AbstractString) where {T<:Union{TAMQPShortStr,TAMQPLongStr,TAMQPByteArray}} = T(length(s), Vector{UInt8}(codeunits(String(s))))
 convert(::Type{TAMQPLongStr}, d::Vector{UInt8}) = TAMQPLongStr(length(d), d)
 convert(::Type{TAMQPByteArray}, d::Vector{UInt8}) = TAMQPByteArray(length(d), d)
@@ -12,7 +12,7 @@ as_fval(v::String) = convert(TAMQPFieldValue{TAMQPLongStr}, convert(TAMQPLongStr
 
 convert(::Type{Any}, t::TAMQPFieldTable) = convert(Dict{Any,Any}, t)
 convert(::Type{Dict{K,V}}, t::TAMQPFieldTable) where {K, V} = Dict{K,V}(f.name => f.val for f in t.data)
-convert(::Type{Dict{String, String}}, t::TAMQPFieldTable) = Dict{String, String}(String(f.name.data) => String(f.val.fld.data) for f in t.data)
+convert(::Type{Dict{String, String}}, t::TAMQPFieldTable) = Dict{String, String}(String(copy(f.name.data)) => String(copy(f.val.fld.data)) for f in t.data)
 function convert(::Type{TAMQPFieldTable}, d::Dict{String,Any})
     data = TAMQPFieldValuePair[]
     for (n,v) in d
