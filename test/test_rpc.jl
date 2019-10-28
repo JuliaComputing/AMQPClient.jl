@@ -28,7 +28,7 @@ function test_rpc_client(;virtualhost="/", host="localhost", port=AMQPClient.AMQ
     reply_queue_id += 1
     queue_name = QUEUE_RPC * "_" * string(reply_queue_id) * "_" * string(getpid())
     testlog("client creating queue " * queue_name * "...")
-    success, message_count, consumer_count = queue_declare(chan1, queue_name; exclusive=true)
+    success, queue_name, message_count, consumer_count = queue_declare(chan1, queue_name; exclusive=true)
 
     testlog("client testing rpc...")
     rpc_reply_count = 0
@@ -182,3 +182,4 @@ function runtests()
     testlog("done")
 end
 end # module AMQPTestRPC
+
