@@ -37,6 +37,8 @@ end
 function TAMQPBit(b::TAMQPBit, setbit::TAMQPBit, pos::Int)
     TAMQPBit(b.val | (setbit.val << (pos-1)))
 end
+TAMQPBit(b::Bool) = TAMQPBit(UInt8(b))
+TAMQPBit(b::T) where {T<:Integer} = TAMQPBit(Bool(b))
 
 struct TAMQPDecimalValue
     scale::TAMQPScale
@@ -47,16 +49,22 @@ struct TAMQPShortStr <: TAMQPLengthPrefixed
     len::TAMQPOctet
     data::Vector{UInt8}
 end
+TAMQPShortStr(d::Vector{UInt8}) = TAMQPShortStr(length(d), d)
+TAMQPShortStr(s::AbstractString) = TAMQPShortStr(Vector{UInt8}(codeunits(String(s))))
 
 struct TAMQPLongStr <: TAMQPLengthPrefixed
     len::TAMQPLongUInt
     data::Vector{UInt8}
 end
+TAMQPLongStr(d::Vector{UInt8}) = TAMQPLongStr(length(d), d)
+TAMQPLongStr(s::AbstractString) = TAMQPLongStr(Vector{UInt8}(codeunits(String(s))))
 
 struct TAMQPByteArray <: TAMQPLengthPrefixed
     len::TAMQPLongUInt
     data::Vector{UInt8}
 end
+TAMQPByteArray(d::Vector{UInt8}) = TAMQPByteArray(length(d), d)
+TAMQPByteArray(s::AbstractString) = TAMQPByteArray(Vector{UInt8}(codeunits(String(s))))
 
 const TAMQPFieldName = TAMQPShortStr
 const TAMQPFV = Union{Real, TAMQPDecimalValue, TAMQPLengthPrefixed, Nothing}
@@ -65,6 +73,9 @@ struct TAMQPFieldValue{T <: TAMQPFV}
     typ::Char  # as in FieldValueIndicatorMap
     fld::T
 end
+TAMQPFieldValue(v::T) where {T} = TAMQPFieldValue{T}(FieldIndicatorMap[T], v)
+TAMQPFieldValue(v::Dict) = TAMQPFieldValue(TAMQPFieldTable(v))
+TAMQPFieldValue(v::String) = TAMQPFieldValue(TAMQPLongStr(v))
 
 struct TAMQPFieldValuePair{T <: TAMQPFV}
     name::TAMQPFieldName
@@ -75,11 +86,14 @@ struct TAMQPFieldArray <: TAMQPLengthPrefixed
     len::TAMQPLongInt
     data::Vector{TAMQPFieldValue}
 end
+TAMQPFieldArray(data::Vector{TAMQPFieldValue}) = TAMQPFieldArray(length(data), data)
 
 struct TAMQPFieldTable <: TAMQPLengthPrefixed
     len::TAMQPLongUInt
     data::Vector{TAMQPFieldValuePair}
 end
+TAMQPFieldTable(data::Vector{TAMQPFieldValuePair}) = TAMQPFieldTable(length(data), data)
+TAMQPFieldTable(dict::Dict) = TAMQPFieldTable(TAMQPFieldValuePair[TAMQPFieldValuePair(TAMQPShortStr(String(n)), TAMQPFieldValue(v)) for (n,v) in dict])
 
 const TAMQPField = Union{TAMQPBit, Integer, TAMQPShortStr, TAMQPLongStr, TAMQPFieldTable}
 
@@ -96,7 +110,7 @@ const FieldValueIndicatorMap = Dict{Char,DataType}(
     'f' => TAMQPFloat,
     'd' => TAMQPDouble,
     'D' => TAMQPDecimalValue,
-    's' => TAMQPShortUInt,
+    's' => TAMQPShortStr,
     'S' => TAMQPLongStr,
     'x' => TAMQPByteArray,
     'A' => TAMQPFieldArray,
@@ -142,12 +156,12 @@ struct TAMQPMethodPayload
         method = ntoh(read(io, TAMQPMethodId))
         args = methodargs(class, method)
         fields = Vector{Pair{Symbol,TAMQPField}}(undef, length(args))
-        @debug("reading method payload class:$class, method:$method, nargs:$(length(args))")
+        @debug("reading method payload", class, method, nargs=length(args))
         bitpos = 0
         bitval = TAMQPBit(0)
         for idx in 1:length(fields)
             fld = args[idx]
-            @debug("reading field $(fld.first) of type $(fld.second)")
+            @debug("reading", field=fld.first, type=fld.second)
             if fld.second === TAMQPBit
                 bitpos += 1
                 (bitpos == 1) && (bitval = read(io, fld.second))
@@ -168,7 +182,8 @@ struct TAMQPMethodPayload
         fields = Pair{Symbol,TAMQPField}[]
         for idx in 1:length(method.args)
             (argname,argtype) = method.args[idx]
-            push!(fields, Pair{Symbol,TAMQPField}(argname, convert(argtype, fldvals[idx])))
+            argval = fldvals[idx]
+            push!(fields, Pair{Symbol,TAMQPField}(argname, isa(argval, argtype) ? argval : argtype(argval)))
         end
         new(class.id, method.id, fields)
     end

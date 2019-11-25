@@ -4,14 +4,6 @@ import Base: write, read, read!, close, convert, show, isopen
 
 using Sockets
 
-const DEBUG = false
-
-# 0.7: use builtin logging by enabling following statement
-# using Logging; Logging.global_logger(Logging.ConsoleLogger(stderr, Logging.Debug))
-macro debug(s)
-    esc(:(DEBUG && Base.@debug($s)))
-end
-
 # Client property info that gets sent to the server on connection startup
 const CLIENT_IDENTIFICATION = Dict{String,Any}(
     "product" => "Julia AMQPClient",

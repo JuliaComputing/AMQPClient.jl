@@ -52,7 +52,8 @@ function set_properties(msg::Message; kwargs...)
         if v === nothing
             delete!(msg.properties, k)
         else
-            msg.properties[k] = convert(PROPERTIES[k].typ, v)
+            # all possible property types have constructors that can be used to create them
+            msg.properties[k] = (PROPERTIES[k].typ)(v)
         end
     end
     nothing
