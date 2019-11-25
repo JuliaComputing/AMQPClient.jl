@@ -1,21 +1,36 @@
-# Documentation: http://docs.travis-ci.com/user/languages/julia/
 language: julia
-sudo: required
+
 os:
   - linux
+
+# this lets us have more RAM that we need to run multiple parallel julia processes
+sudo: required
+dist: xenial
+
 julia:
   - 1.0
+  - 1.1
+  - 1.2
+  - 1.3
   - nightly
-services:
-  - rabbitmq
+
+addons:
+  apt:
+    packages:
+    - rabbitmq-server 
+
+matrix:
+  allow_failures:
+  - julia: nightly
+
 notifications:
   email: false
+
 # uncomment the following lines to override the default test script
-script:
-  - if [[ -a .git/shallow ]]; then git fetch --unshallow; fi
-  - julia --inline=no -e 'using Pkg; Pkg.clone(pwd()); Pkg.build("AMQPClient"); Pkg.test("AMQPClient"; coverage=true)'
+#script:
+#  - if [[ -a .git/shallow ]]; then git fetch --unshallow; fi
+#  - julia --inline=no -e 'using Pkg; Pkg.clone(pwd()); Pkg.build("AMQPClient"); Pkg.test("AMQPClient"; coverage=true)'
+
 after_success:
-  # push coverage results to Coveralls
-  - julia -e 'cd(using Pkg; Pkg.dir("AMQPClient")); Pkg.add("Coverage"); using Coverage; Coveralls.submit(Coveralls.process_folder())'
-  # push coverage results to Codecov
-  - julia -e 'cd(using Pkg; Pkg.dir("AMQPClient")); Pkg.add("Coverage"); using Coverage; Codecov.submit(Codecov.process_folder())'
+  - julia -e 'using Pkg; Pkg.add("Coverage"); using Coverage; Coveralls.submit(Coveralls.process_folder())';
+#  - julia -e 'using Pkg; Pkg.add("Coverage"); using Coverage; Codecov.submit(Codecov.process_folder())';

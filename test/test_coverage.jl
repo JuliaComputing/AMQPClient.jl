@@ -201,6 +201,18 @@ function test_types()
               Pair{Symbol,AMQPClient.TAMQPField}(:fieldtable,   ft)]
     show(iob, fields)
     @test length(take!(iob)) > 0
+
+    mpayload = AMQPClient.TAMQPMethodPayload(:Channel, :Open, ("",))
+    show(iob, mpayload)
+    @test length(take!(iob)) > 0
+
+    mfprop = AMQPClient.TAMQPFrameProperties(AMQPClient.TAMQPChannel(0), AMQPClient.TAMQPPayloadSize(100))
+    show(iob, mfprop)
+    @test length(take!(iob)) > 0
+
+    mframe = AMQPClient.TAMQPMethodFrame(mfprop, mpayload)
+    show(iob, mframe)
+    @test length(take!(iob)) > 0
 end
 
 end # module AMQPTestCoverage
