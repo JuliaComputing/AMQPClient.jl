@@ -140,7 +140,7 @@ end
 function runtests()
     println("starting consumer")
     consumer = @async spawn_test("test_throughput.jl", "--runconsumer")
-    sleep(5)
+    sleep(10)
     println("starting publisher")
     publisher = @async spawn_test("test_throughput.jl", "--runpublisher")
     wait(consumer)

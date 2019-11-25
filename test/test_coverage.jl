@@ -188,18 +188,30 @@ function test_types()
         "int"       => 10,
         "uint"      => 0x1,
         "float"     => rand(),
-        "shortstr"  => convert(AMQPClient.TAMQPShortStr, randstring(10)),
-        "longstr"   => convert(AMQPClient.TAMQPLongStr, randstring(1024)))
-    ft = convert(AMQPClient.TAMQPFieldTable, d)
+        "shortstr"  => AMQPClient.TAMQPShortStr(randstring(10)),
+        "longstr"   => AMQPClient.TAMQPLongStr(randstring(1024)))
+    ft = AMQPClient.TAMQPFieldTable(d)
     iob = IOBuffer()
     show(iob, ft)
     @test length(take!(iob)) > 0
 
     fields = [Pair{Symbol,AMQPClient.TAMQPField}(:bit,          AMQPClient.TAMQPBit(0x1)),
-              Pair{Symbol,AMQPClient.TAMQPField}(:shortstr,     convert(AMQPClient.TAMQPShortStr, randstring(10))),
-              Pair{Symbol,AMQPClient.TAMQPField}(:longstr,      convert(AMQPClient.TAMQPLongStr, randstring(1024))),
+              Pair{Symbol,AMQPClient.TAMQPField}(:shortstr,     AMQPClient.TAMQPShortStr(randstring(10))),
+              Pair{Symbol,AMQPClient.TAMQPField}(:longstr,      AMQPClient.TAMQPLongStr(randstring(1024))),
               Pair{Symbol,AMQPClient.TAMQPField}(:fieldtable,   ft)]
     show(iob, fields)
+    @test length(take!(iob)) > 0
+
+    mpayload = AMQPClient.TAMQPMethodPayload(:Channel, :Open, ("",))
+    show(iob, mpayload)
+    @test length(take!(iob)) > 0
+
+    mfprop = AMQPClient.TAMQPFrameProperties(AMQPClient.TAMQPChannel(0), AMQPClient.TAMQPPayloadSize(100))
+    show(iob, mfprop)
+    @test length(take!(iob)) > 0
+
+    mframe = AMQPClient.TAMQPMethodFrame(mfprop, mpayload)
+    show(iob, mframe)
     @test length(take!(iob)) > 0
 end
 
