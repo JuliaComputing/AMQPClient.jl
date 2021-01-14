@@ -3,18 +3,17 @@ module AMQPTestRPC
 using AMQPClient, Test, Random
 
 const JULIA_HOME = Sys.BINDIR
-
 const QUEUE_RPC = "queue_rpc"
-
-testlog(msg) = println(msg)
-reply_queue_id = 0
-server_id = 0
-
 const NRPC_MSGS = 100
 const NRPC_CLNTS = 4
 const NRPC_SRVRS = 4
+const server_lck = Ref(ReentrantLock())
+const queue_declared = Ref(false)
+const servers_done = Channel{Int}(NRPC_SRVRS)
 
-function test_rpc_client(;virtualhost="/", host="localhost", port=AMQPClient.AMQP_DEFAULT_PORT, auth_params=AMQPClient.DEFAULT_AUTH_PARAMS)
+testlog(msg) = println(msg)
+
+function test_rpc_client(reply_queue_id; virtualhost="/", host="localhost", port=AMQPClient.AMQP_DEFAULT_PORT, auth_params=AMQPClient.DEFAULT_AUTH_PARAMS)
     # open a connection
     testlog("client opening connection...")
     conn = connection(;virtualhost=virtualhost, host=host, port=port, auth_params=auth_params)
@@ -24,8 +23,6 @@ function test_rpc_client(;virtualhost="/", host="localhost", port=AMQPClient.AMQ
     chan1 = channel(conn, AMQPClient.UNUSED_CHANNEL, true)
 
     # create a reply queue for a client
-    global reply_queue_id
-    reply_queue_id += 1
     queue_name = QUEUE_RPC * "_" * string(reply_queue_id) * "_" * string(getpid())
     testlog("client creating queue " * queue_name * "...")
     success, queue_name, message_count, consumer_count = queue_declare(chan1, queue_name; exclusive=true)
@@ -83,11 +80,7 @@ function test_rpc_client(;virtualhost="/", host="localhost", port=AMQPClient.AMQ
     testlog("client done.")
 end
 
-function test_rpc_server(;virtualhost="/", host="localhost", port=AMQPClient.AMQP_DEFAULT_PORT, auth_params=AMQPClient.DEFAULT_AUTH_PARAMS)
-    global server_id
-    server_id += 1
-    my_server_id = server_id
-
+function test_rpc_server(my_server_id; virtualhost="/", host="localhost", port=AMQPClient.AMQP_DEFAULT_PORT, auth_params=AMQPClient.DEFAULT_AUTH_PARAMS)
     # open a connection
     testlog("server $my_server_id opening connection...")
     conn = connection(;virtualhost=virtualhost, host=host, port=port, auth_params=auth_params)
@@ -97,10 +90,15 @@ function test_rpc_server(;virtualhost="/", host="localhost", port=AMQPClient.AMQ
     chan1 = channel(conn, AMQPClient.UNUSED_CHANNEL, true)
 
     # create queues (no need to bind if we are using the default exchange)
-    testlog("server $my_server_id creating queues...")
-    # this is the callback queue
-    success, message_count, consumer_count = queue_declare(chan1, QUEUE_RPC)
-    @test success
+    lock(server_lck[]) do
+        if !(queue_declared[])
+            testlog("server $my_server_id creating queues...")
+            # this is the callback queue
+            success, message_count, consumer_count = queue_declare(chan1, QUEUE_RPC)
+            @test success
+            queue_declared[] = true
+        end
+    end
 
     # test RPC
     testlog("server $my_server_id testing rpc...")
@@ -131,16 +129,24 @@ function test_rpc_server(;virtualhost="/", host="localhost", port=AMQPClient.AMQ
     end
 
     testlog("server $my_server_id closing down...")
-    success, message_count = queue_purge(chan1, QUEUE_RPC)
-    @test success
-    @test message_count == 0
-
     @test basic_cancel(chan1, consumer_tag)
+    testlog("server $my_server_id cancelled consumer...")
 
-    success, message_count = queue_delete(chan1, QUEUE_RPC)
-    @test success
-    @test message_count == 0
-    testlog("server $my_server_id deleted rpc queue")
+    lock(server_lck[]) do
+        take!(servers_done)
+        # the last server to finish will purge and delete the queue
+        if length(servers_done.data) == 0
+            success, message_count = queue_purge(chan1, QUEUE_RPC)
+            @test success
+            @test message_count == 0
+            testlog("server $my_server_id purged queue...")
+
+            success, message_count = queue_delete(chan1, QUEUE_RPC)
+            @test success
+            @test message_count == 0
+            testlog("server $my_server_id deleted rpc queue")
+        end
+    end
 
     # close channels and connection
     close(chan1)
@@ -157,29 +163,23 @@ end
 
 function runtests()
     testlog("testing multiple client server rpc")
-    clients = Vector{Task}()
-    servers = Vector{Task}()
 
     for idx in 1:NRPC_SRVRS
-        push!(servers, @async test_rpc_server())
+        put!(servers_done, idx)
     end
 
-    for idx in 1:NRPC_CLNTS
-        push!(clients, @async test_rpc_client())
-    end
-
-    tasks_active = NRPC_CLNTS + NRPC_SRVRS
-    while tasks_active > 0
-        tasks_active = 0
+    @sync begin
         for idx in 1:NRPC_SRVRS
-            istaskdone(servers[idx]) || (tasks_active += 1)
+            @async test_rpc_server(idx)
         end
+
         for idx in 1:NRPC_CLNTS
-            istaskdone(clients[idx]) || (tasks_active += 1)
+            @async test_rpc_client(idx)
         end
-        sleep(5)
     end
+
     testlog("done")
 end
+
 end # module AMQPTestRPC
 

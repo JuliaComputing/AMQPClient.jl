@@ -210,8 +210,11 @@ mutable struct MessageConsumer
     callback::Function
     receiver::Task
 
-    function MessageConsumer(chan_id::TAMQPChannel, consumer_tag::String, callback::Function; buffer_size::Int=typemax(Int))
-        c = new(chan_id, consumer_tag, Channel{Message}(buffer_size), callback)
+    function MessageConsumer(chan_id::TAMQPChannel, consumer_tag::String, callback::Function;
+        buffer_size::Int=typemax(Int),
+        buffer::Channel{Message}=Channel{Message}(buffer_size))
+
+        c = new(chan_id, consumer_tag, buffer, callback)
         c.receiver = @async connection_processor(c, "Consumer $consumer_tag", channel_message_consumer)
         c
     end
@@ -232,6 +235,8 @@ mutable struct MessageChannel <: AbstractChannel
     partial_msgs::Vector{Message} # holds partial messages while they are getting read (message bodies arrive in sequence)
     chan_get::Channel{Union{Message, Nothing}}  # channel used for received messages, in sync get call (TODO: maybe type more strongly?)
     consumers::Dict{String,MessageConsumer}
+    pending_msgs::Dict{String,Channel{Message}} # holds messages received that do not have a consumer registered
+    lck::ReentrantLock
 
     closereason::Union{CloseReason, Nothing}
 
@@ -239,7 +244,7 @@ mutable struct MessageChannel <: AbstractChannel
         new(id, conn, CONN_STATE_CLOSED, true,
             Channel{TAMQPGenericFrame}(CONN_MAX_QUEUED), nothing, Dict{Tuple,Tuple{Function,Any}}(),
             Message[], Channel{Union{Message, Nothing}}(1), Dict{String,MessageConsumer}(),
-            nothing)
+            Dict{String,Channel{Message}}(), ReentrantLock(), nothing)
     end
 end
 
@@ -422,7 +427,7 @@ end
 clear_handlers(c::MessageChannel) = (empty!(c.callbacks); nothing)
 function handle(c::MessageChannel, classname::Symbol, methodname::Symbol, cb=nothing, ctx=nothing)
     cbkey = method_key(classname, methodname)
-    if cb == nothing
+    if cb === nothing
         delete!(c.callbacks, cbkey)
     else
         c.callbacks[cbkey] = (cb, ctx)
@@ -431,7 +436,7 @@ function handle(c::MessageChannel, classname::Symbol, methodname::Symbol, cb=not
 end
 function handle(c::MessageChannel, frame_type::Integer, cb=nothing, ctx=nothing)
     cbkey = frame_key(frame_type)
-    if cb == nothing
+    if cb === nothing
         delete!(c.callbacks, cbkey)
     else
         c.callbacks[cbkey] = (cb, ctx)
@@ -779,15 +784,28 @@ nowait: do not send a reply method
 """
 function basic_consume(chan::MessageChannel, queue::String, consumer_fn::Function; consumer_tag::String="", no_local::Bool=false, no_ack::Bool=false,
     exclusive::Bool=false, nowait::Bool=false, arguments::Dict{String,Any}=Dict{String,Any}(), timeout::Int=DEFAULT_TIMEOUT, buffer_sz::Int=typemax(Int))
+
+    # register the consumer and get the consumer_tag
     result = _wait_resp(chan, (true, ""), nowait, on_basic_consume_ok, :Basic, :ConsumeOk, (false, ""), timeout) do
         send_basic_consume(chan, queue, consumer_tag, no_local, no_ack, exclusive, nowait, arguments)
     end
 
-    # setup a message consumer
+    # start the message consumer
     if result[1]
         consumer_tag = result[2]
-        chan.consumers[consumer_tag] = MessageConsumer(chan.id, consumer_tag, consumer_fn; buffer_size=buffer_sz)
+
+        # set up message buffer beforehand to store messages that the consumer may receive while we are still setting things up,
+        # or get the buffer that was set up already because we received messages
+        lock(chan.lck) do
+            consumer_buffer = get!(chan.pending_msgs, consumer_tag) do
+                Channel{Message}(buffer_sz)
+            end
+            consumer_buffer.sz_max = buffer_sz
+            chan.consumers[consumer_tag] = MessageConsumer(chan.id, consumer_tag, consumer_fn; buffer=consumer_buffer)
+            delete!(chan.pending_msgs, consumer_tag)
+        end
     end
+
     result
 end
 
@@ -1177,7 +1195,7 @@ function on_basic_get_empty_or_ok(chan::MessageChannel, m::TAMQPMethodFrame, ctx
 end
 
 function on_channel_message_in(chan::MessageChannel, m::TAMQPContentHeaderFrame, ctx)
-    msg = chan.partial_msgs[1]
+    msg = last(chan.partial_msgs)
     msg.properties = m.hdrpayload.proplist
     msg.data = Vector{UInt8}(undef, m.hdrpayload.bodysize)
     msg.filled = 0
@@ -1185,7 +1203,7 @@ function on_channel_message_in(chan::MessageChannel, m::TAMQPContentHeaderFrame,
 end
 
 function on_channel_message_in(chan::MessageChannel, m::TAMQPContentBodyFrame, ctx)
-    msg = chan.partial_msgs[1]
+    msg = last(chan.partial_msgs)
     data = m.payload.data
     startpos = msg.filled + 1
     endpos = min(length(msg.data), msg.filled + length(data))
@@ -1195,11 +1213,16 @@ function on_channel_message_in(chan::MessageChannel, m::TAMQPContentBodyFrame, c
     if msg.filled >= length(msg.data)
         # got all data for msg
         if isempty(msg.consumer_tag)
-            put!(chan.chan_get, popfirst!(chan.partial_msgs))
-        elseif msg.consumer_tag in keys(chan.consumers)
-            put!(chan.consumers[msg.consumer_tag].recvq, popfirst!(chan.partial_msgs))
+            put!(chan.chan_get, pop!(chan.partial_msgs))
         else
-            @debug("discarding message, no consumer with tag", tag=msg.consumer_tag)
+            lock(chan.lck) do
+                if msg.consumer_tag in keys(chan.consumers)
+                    put!(chan.consumers[msg.consumer_tag].recvq, pop!(chan.partial_msgs))
+                else
+                    put!(get!(()->Channel{Message}(typemax(Int)), chan.pending_msgs, msg.consumer_tag), msg)
+                    @debug("holding message, no consumer yet with tag", tag=msg.consumer_tag)
+                end
+            end
         end
     end
 
@@ -1211,5 +1234,3 @@ on_confirm_select_ok(chan::MessageChannel, m::TAMQPMethodFrame, ctx) = _on_ack(c
 # ----------------------------------------
 # send and recv for methods end
 # ----------------------------------------
-
-
