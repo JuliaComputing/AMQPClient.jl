@@ -20,12 +20,14 @@ function runtests(;virtualhost="/", host="localhost", port=AMQPClient.AMQP_DEFAU
 
     # open a connection
     testlog("opening connection...")
-    conn = connection(;virtualhost=virtualhost, host=host, port=port, auth_params=auth_params)
+    conn = connection(;virtualhost=virtualhost, host=host, port=port, auth_params=auth_params, send_queue_size=512)
+    @test conn.conn.sendq.sz_max == 512
 
     # open a channel
     testlog("opening channel...")
     chan1 = channel(conn, AMQPClient.UNUSED_CHANNEL, true)
     @test chan1.id == 1
+    @test conn.conn.sendq.sz_max == 512
 
     # test default exchange names
     @test default_exchange_name() == ""
@@ -63,6 +65,8 @@ function runtests(;virtualhost="/", host="localhost", port=AMQPClient.AMQP_DEFAU
     # publish 10 messages
     for idx in 1:10
         basic_publish(chan1, M; exchange=EXCG_DIRECT, routing_key=ROUTE1)
+        flush(chan1)
+        @test !isready(chan1.conn.sendq)
     end
 
     # basic get 10 messages

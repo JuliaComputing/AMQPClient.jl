@@ -191,8 +191,8 @@ mutable struct Connection
     heartbeat_time_server::Float64
     heartbeat_time_client::Float64
 
-    function Connection(virtualhost::String="/", host::String="localhost", port::Int=AMQP_DEFAULT_PORT)
-        sendq = Channel{TAMQPGenericFrame}(CONN_MAX_QUEUED)
+    function Connection(virtualhost::String="/", host::String="localhost", port::Int=AMQP_DEFAULT_PORT; send_queue_size::Int=CONN_MAX_QUEUED)
+        sendq = Channel{TAMQPGenericFrame}(send_queue_size)
         sendlck = Channel{UInt8}(1)
         put!(sendlck, 1)
         new(virtualhost, host, port, nothing,
@@ -245,6 +245,13 @@ mutable struct MessageChannel <: AbstractChannel
             Channel{TAMQPGenericFrame}(CONN_MAX_QUEUED), nothing, Dict{Tuple,Tuple{Function,Any}}(),
             Message[], Channel{Union{Message, Nothing}}(1), Dict{String,MessageConsumer}(),
             Dict{String,Channel{Message}}(), ReentrantLock(), nothing)
+    end
+end
+
+flush(c::MessageChannel) = flush(c.conn)
+function flush(c::Connection)
+    while isready(c.sendq) && (c.sender !== nothing) && !istaskdone(c.sender)
+        yield()
     end
 end
 
@@ -492,9 +499,15 @@ function channel(c::Connection, id::Integer, create::Bool; connect_timeout=DEFAU
     chan
 end
 
-function connection(;virtualhost="/", host="localhost", port=AMQPClient.AMQP_DEFAULT_PORT, auth_params=AMQPClient.DEFAULT_AUTH_PARAMS, channelmax=AMQPClient.DEFAULT_CHANNELMAX, framemax=0, heartbeat=0, connect_timeout=AMQPClient.DEFAULT_CONNECT_TIMEOUT)
+function connection(; virtualhost="/", host="localhost", port=AMQPClient.AMQP_DEFAULT_PORT,
+        framemax=0,
+        heartbeat=0,
+        send_queue_size::Integer=CONN_MAX_QUEUED,
+        auth_params=AMQPClient.DEFAULT_AUTH_PARAMS,
+        channelmax::Integer=AMQPClient.DEFAULT_CHANNELMAX,
+        connect_timeout=AMQPClient.DEFAULT_CONNECT_TIMEOUT)
     @debug("connecting", host, port, virtualhost)
-    conn = AMQPClient.Connection(virtualhost, host, port)
+    conn = AMQPClient.Connection(virtualhost, host, port; send_queue_size=send_queue_size)
     chan = channel(conn, AMQPClient.DEFAULT_CHANNEL, true)
 
     # setup handler for Connection.Start
