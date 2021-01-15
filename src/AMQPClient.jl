@@ -1,6 +1,6 @@
 module AMQPClient
 
-import Base: write, read, read!, close, convert, show, isopen
+import Base: write, read, read!, close, convert, show, isopen, flush
 
 using Sockets
 
@@ -26,7 +26,7 @@ export tx_select, tx_commit, tx_rollback
 export basic_qos, basic_consume, basic_cancel, basic_publish, basic_get, basic_ack, basic_reject, basic_recover
 export confirm_select
 export EXCHANGE_TYPE_DIRECT, EXCHANGE_TYPE_FANOUT, EXCHANGE_TYPE_TOPIC, EXCHANGE_TYPE_HEADERS
-export read, read!, close, convert, show
+export read, read!, close, convert, show, flush
 export Message, set_properties, PERSISTENT, NON_PERSISTENT
 
 end # module
