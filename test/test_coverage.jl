@@ -35,6 +35,15 @@ function runtests(;virtualhost="/", host="localhost", port=AMQPClient.AMQP_DEFAU
     testlog("creating exchanges...")
     @test exchange_declare(chan1, EXCG_DIRECT, EXCHANGE_TYPE_DIRECT; arguments=Dict{String,Any}("Hello"=>"World", "Foo"=>"bar"))
     @test exchange_declare(chan1, EXCG_FANOUT, EXCHANGE_TYPE_FANOUT)
+    # redeclaring the exchange with same attributes should be fine
+    @test exchange_declare(chan1, EXCG_FANOUT, EXCHANGE_TYPE_FANOUT)
+    # redeclaring an existing exchange with different attributes should fail
+    @test_throws AMQPClient.AMQPClientException exchange_declare(chan1, EXCG_FANOUT, EXCHANGE_TYPE_DIRECT)
+
+    # must reconnect as channel gets closed after a channel exception
+    close(chan1) # closing an already closed channel should be fine
+    chan1 = channel(conn, AMQPClient.UNUSED_CHANNEL, true)
+    @test chan1.id == 1
 
     # create and bind queues
     testlog("creating queues...")

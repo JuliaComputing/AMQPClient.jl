@@ -631,13 +631,6 @@ function _wait_resp(sendmethod, chan::MessageChannel, default_result::T,
     result = default_result
     if !nowait
         reply = Channel{T}(1)
-        # timer to time the request out, in case of an error
-        t = Timer(timeout) do t
-            try
-                put!(reply, timeout_result)
-            catch
-            end
-        end
         # register a callback
         handle(chan, resp_class, resp_meth, resp_handler, reply)
     end
@@ -646,7 +639,18 @@ function _wait_resp(sendmethod, chan::MessageChannel, default_result::T,
 
     if !nowait
         # wait for response
-        result = take!(reply)
+        result = timeout_result
+        if :ok === timedwait(()->(isready(reply) || !isopen(chan)), Float64(timeout); pollint=0.01)
+            if isready(reply)
+                result = take!(reply)
+            else
+                error_message = "Connection closed"
+                if nothing !== chan.closereason
+                    error_message = string(error_message, " - ", string(chan.closereason.code), " (", convert(String, chan.closereason.msg), ")")
+                end
+                throw(AMQPClientException(error_message))
+            end
+        end
         close(reply)
     end
     result
