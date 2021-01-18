@@ -80,7 +80,7 @@ function write(io::IO, ft::TAMQPFieldTable)
     end
     buff = take!(iob)
     len = TAMQPLongUInt(length(buff))
-    @debug("write fieldtable", len, type=typeof(len))
+    @debug("write fieldtable", len)
     l = write(io, hton(len))
     if len > 0
         l += write(io, buff)
@@ -171,7 +171,7 @@ mutable struct Connection
     virtualhost::String
     host::String
     port::Int
-    sock::Union{TCPSocket, Nothing}
+    sock::Union{TCPSocket, BufferedTLSSocket, Nothing}
 
     properties::Dict{Symbol,Any}
     capabilities::Dict{String,Any}
@@ -191,7 +191,7 @@ mutable struct Connection
     heartbeat_time_server::Float64
     heartbeat_time_client::Float64
 
-    function Connection(virtualhost::String="/", host::String="localhost", port::Int=AMQP_DEFAULT_PORT; send_queue_size::Int=CONN_MAX_QUEUED)
+    function Connection(; virtualhost::String="/", host::String="localhost", port::Int=AMQP_DEFAULT_PORT, send_queue_size::Int=CONN_MAX_QUEUED)
         sendq = Channel{TAMQPGenericFrame}(send_queue_size)
         sendlck = Channel{UInt8}(1)
         put!(sendlck, 1)
@@ -326,10 +326,11 @@ function connection_processor(c, name, fn)
     catch err
         reason = "$name task exiting."
         if isa(c, MessageConsumer)
+            if !(c.state in (CONN_STATE_CLOSING, CONN_STATE_CLOSED))
+                reason = reason * " Unhandled exception: $err"
+                @warn(reason, exception=(err,catch_backtrace()))
+            end
             close(c)
-            reason = reason * " Unhandled exception: $err"
-            #showerror(STDERR, err)
-            @debug(reason)
         else
             isconnclosed = !isopen(c)
             ischanclosed = isa(c, MessageChannel) && isa(err, InvalidStateException) && err.state == :closed
@@ -339,28 +340,49 @@ function connection_processor(c, name, fn)
                     reason = reason * " by peer"
                     close(c, false, true)
                 end
-                @debug(reason)
+                @debug(reason, exception=(err,catch_backtrace()))
             else
-                reason = reason * " Unhandled exception: $err"
-                #showerror(stderr, err)
-                @debug(reason)
+                if !(c.state in (CONN_STATE_CLOSING, CONN_STATE_CLOSED))
+                    reason = reason * " Unhandled exception: $err"
+                    @warn(reason, exception=(err,catch_backtrace()))
+                end
                 close(c, false, true)
-                #rethrow(err)
             end
         end
     end
 end
 
 function connection_sender(c::Connection)
-    msg = take!(c.sendq)
     @debug("==> sending on conn", host=c.virtualhost)
-    nbytes = write(sock(c), msg)
+    nbytes = sendq_to_stream(sock(c), c.sendq)
     @debug("==> sent", nbytes)
-
-    # update heartbeat time for client
-    c.heartbeat_time_client = time()
-
+    c.heartbeat_time_client = time()  # update heartbeat time for client
     nothing
+end
+
+function sendq_to_stream(conn::TCPSocket, sendq::Channel{TAMQPGenericFrame})
+    msg = take!(sendq)
+    if length(msg.payload.data) > TCP_MIN_WRITEBUFF_SIZE    # write large messages directly
+        nbytes = write(conn, msg)
+    else    # coalesce short messages and do single write
+        buff = IOBuffer()
+        nbytes = write(buff, msg)
+        while isready(sendq) && (nbytes < TCP_MAX_WRITEBUFF_SIZE)
+            nbytes += write(buff, take!(sendq))
+        end
+        write(conn, take!(buff))
+    end
+    nbytes
+end
+function sendq_to_stream(conn::BufferedTLSSocket, sendq::Channel{TAMQPGenericFrame})
+    # avoid multiple small writes to TLS layer
+    nbytes = write(conn, take!(sendq))
+    while isready(sendq) && (nbytes < MbedTLS.MBEDTLS_SSL_MAX_CONTENT_LEN)
+        nbytes += write(conn, take!(sendq))
+    end
+    # flush does a single write of accumulated buffer
+    flush(conn)
+    nbytes
 end
 
 function connection_receiver(c::Connection)
@@ -372,7 +394,7 @@ function connection_receiver(c::Connection)
     channelid = f.props.channel
     @debug("<== read message on conn", host=c.virtualhost, channelid)
     if !(channelid in keys(c.channels))
-        @debug("Discarding message for unknown channel", channelid)
+        @warn("Discarding message for unknown channel", channelid)
     end
     chan = channel(c, channelid)
     put!(chan.recvq, f)
@@ -390,7 +412,7 @@ function connection_heartbeater(c::Connection)
     end
 
     if (now - c.heartbeat_time_server) > (2 * c.heartbeat)
-        @debug("server heartbeat missed", secs=(now - c.heartbeat_time_server))
+        @warn("server heartbeat missed", secs=(now - c.heartbeat_time_server))
         close(c, false, false)
     end
     nothing
@@ -416,7 +438,7 @@ function channel_receiver(c::MessageChannel)
         cbkey = (f.hdr,)
     else
         m = f
-        @debug("<== received unhandled frame type", channel=f.props.channel, type=f.hdr)
+        @warn("<== received unhandled frame type", channel=f.props.channel, type=f.hdr)
         cbkey = (f.hdr,)
     end
     (cb,ctx) = get(c.callbacks, cbkey, (on_unexpected_message, nothing))
@@ -498,6 +520,16 @@ function channel(c::Connection, id::Integer, create::Bool; connect_timeout=DEFAU
     end
     chan
 end
+function channel(f, args...; kwargs...)
+    chan = channel(args...; kwargs...)
+    try
+        f(chan)
+    catch
+        rethrow()
+    finally
+        close(chan)
+    end
+end
 
 function connection(; virtualhost="/", host="localhost", port=AMQPClient.AMQP_DEFAULT_PORT,
         framemax=0,
@@ -505,9 +537,10 @@ function connection(; virtualhost="/", host="localhost", port=AMQPClient.AMQP_DE
         send_queue_size::Integer=CONN_MAX_QUEUED,
         auth_params=AMQPClient.DEFAULT_AUTH_PARAMS,
         channelmax::Integer=AMQPClient.DEFAULT_CHANNELMAX,
-        connect_timeout=AMQPClient.DEFAULT_CONNECT_TIMEOUT)
-    @debug("connecting", host, port, virtualhost)
-    conn = AMQPClient.Connection(virtualhost, host, port; send_queue_size=send_queue_size)
+        connect_timeout=AMQPClient.DEFAULT_CONNECT_TIMEOUT,
+        amqps::Union{MbedTLS.SSLConfig,Nothing})
+    @debug("connecting", host, port, virtualhost, tls)
+    conn = Connection(; virtualhost=virtualhost, host=host, port=port, send_queue_size=send_queue_size)
     chan = channel(conn, AMQPClient.DEFAULT_CHANNEL, true)
 
     # setup handler for Connection.Start
@@ -515,7 +548,10 @@ function connection(; virtualhost="/", host="localhost", port=AMQPClient.AMQP_DE
     AMQPClient.handle(chan, :Connection, :Start, AMQPClient.on_connection_start, ctx)
 
     # open socket and start processor tasks
-    conn.sock = connect(conn.host, conn.port)
+    sock = connect(conn.host, conn.port)
+    isdefined(Sockets, :nagle) && Sockets.nagle(sock, false)
+    isdefined(Sockets, :quickack) && Sockets.quickack(sock, true)
+    conn.sock = (amqps !== nothing) ? setup_tls(sock, host, amqps) : sock
     conn.sender = @async   AMQPClient.connection_processor(conn, "ConnectionSender", AMQPClient.connection_sender)
     conn.receiver = @async AMQPClient.connection_processor(conn, "ConnectionReceiver", AMQPClient.connection_receiver)
     chan.receiver = @async AMQPClient.connection_processor(chan, "ChannelReceiver($(chan.id))", AMQPClient.channel_receiver)
@@ -523,6 +559,7 @@ function connection(; virtualhost="/", host="localhost", port=AMQPClient.AMQP_DE
     # initiate handshake
     conn.state = chan.state = AMQPClient.CONN_STATE_OPENING
     write(AMQPClient.sock(chan), AMQPClient.ProtocolHeader)
+    flush(AMQPClient.sock(chan))
 
     if !AMQPClient.wait_for_state(conn, AMQPClient.CONN_STATE_OPEN; timeout=connect_timeout) || !AMQPClient.wait_for_state(chan, AMQPClient.CONN_STATE_OPEN; timeout=connect_timeout)
         throw(AMQPClientException("Connection handshake failed"))
@@ -530,6 +567,17 @@ function connection(; virtualhost="/", host="localhost", port=AMQPClient.AMQP_DE
     chan
 end
 
+function connection(f; kwargs...)
+    conn = connection(; kwargs...)
+
+    try
+        f(conn)
+    catch
+        rethrow()
+    finally
+        close(conn)
+    end
+end
 
 # ----------------------------------------
 # Open channel / connection end
