@@ -9,179 +9,186 @@ const EXCG_FANOUT = "ExcgFanout"
 const QUEUE1 = "queue1"
 const ROUTE1 = "key1"
 
-testlog(msg) = println(msg)
-
-function runtests(;virtualhost="/", host="localhost", port=AMQPClient.AMQP_DEFAULT_PORT, auth_params=AMQPClient.DEFAULT_AUTH_PARAMS)
+function runtests(;virtualhost="/", host="localhost", port=AMQPClient.AMQP_DEFAULT_PORT, auth_params=AMQPClient.DEFAULT_AUTH_PARAMS, amqps=nothing)
     verify_spec()
     test_types()
     @test default_exchange_name("direct") == "amq.direct"
     @test default_exchange_name() == ""
     @test AMQPClient.method_name(AMQPClient.TAMQPMethodPayload(:Basic, :Ack, (1, false))) == "Basic.Ack"
 
+    conn_ref = nothing
+
     # open a connection
-    testlog("opening connection...")
-    conn = connection(;virtualhost=virtualhost, host=host, port=port, auth_params=auth_params, send_queue_size=512)
-    @test conn.conn.sendq.sz_max == 512
+    @info("opening connection")
+    connection(;virtualhost=virtualhost, host=host, port=port, amqps=amqps, auth_params=auth_params, send_queue_size=512) do conn
+        @test conn.conn.sendq.sz_max == 512
 
-    # open a channel
-    testlog("opening channel...")
-    chan1 = channel(conn, AMQPClient.UNUSED_CHANNEL, true)
-    @test chan1.id == 1
-    @test conn.conn.sendq.sz_max == 512
+        # open a channel
+        @info("opening channel")
+        channel(conn, AMQPClient.UNUSED_CHANNEL, true) do chan1
+            @test chan1.id == 1
+            @test conn.conn.sendq.sz_max == 512
 
-    # test default exchange names
-    @test default_exchange_name() == ""
-    @test default_exchange_name(EXCHANGE_TYPE_DIRECT) == "amq.direct"
+            # test default exchange names
+            @test default_exchange_name() == ""
+            @test default_exchange_name(EXCHANGE_TYPE_DIRECT) == "amq.direct"
 
-    # create exchanges
-    testlog("creating exchanges...")
-    @test exchange_declare(chan1, EXCG_DIRECT, EXCHANGE_TYPE_DIRECT; arguments=Dict{String,Any}("Hello"=>"World", "Foo"=>"bar"))
-    @test exchange_declare(chan1, EXCG_FANOUT, EXCHANGE_TYPE_FANOUT)
-    # redeclaring the exchange with same attributes should be fine
-    @test exchange_declare(chan1, EXCG_FANOUT, EXCHANGE_TYPE_FANOUT)
-    # redeclaring an existing exchange with different attributes should fail
-    @test_throws AMQPClient.AMQPClientException exchange_declare(chan1, EXCG_FANOUT, EXCHANGE_TYPE_DIRECT)
-
-    # must reconnect as channel gets closed after a channel exception
-    close(chan1) # closing an already closed channel should be fine
-    chan1 = channel(conn, AMQPClient.UNUSED_CHANNEL, true)
-    @test chan1.id == 1
-
-    # create and bind queues
-    testlog("creating queues...")
-    success, queue_name, message_count, consumer_count = queue_declare(chan1, QUEUE1)
-    @test success
-    @test message_count == 0
-    @test consumer_count == 0
-
-    @test queue_bind(chan1, QUEUE1, EXCG_DIRECT, ROUTE1)
-
-    # rabbitmq 3.6.5 does not support qos
-    # basic_qos(chan1, 1024*10, 10, false)
-
-    M = Message(Vector{UInt8}("hello world"), content_type="text/plain", delivery_mode=PERSISTENT)
-
-    testlog("testing basic publish and get...")
-    # publish 10 messages
-    for idx in 1:10
-        basic_publish(chan1, M; exchange=EXCG_DIRECT, routing_key=ROUTE1)
-        flush(chan1)
-        @test !isready(chan1.conn.sendq)
-    end
-
-    # basic get 10 messages
-    for idx in 1:10
-        result = basic_get(chan1, QUEUE1, false)
-        @test result !== nothing
-        rcvd_msg = result
-        basic_ack(chan1, rcvd_msg.delivery_tag)
-        @test rcvd_msg.remaining == (10-idx)
-        @test rcvd_msg.exchange == EXCG_DIRECT
-        @test rcvd_msg.redelivered == false
-        @test rcvd_msg.routing_key == ROUTE1
-        @test rcvd_msg.data == M.data
-        @test :content_type in keys(rcvd_msg.properties)
-        @test convert(String, rcvd_msg.properties[:content_type]) == "text/plain"
-    end
-
-    # basic get returns null if no more messages
-    @test basic_get(chan1, QUEUE1, false) === nothing
-
-    ## test reject and requeue
-    basic_publish(chan1, M; exchange=EXCG_DIRECT, routing_key=ROUTE1)
-
-    result = basic_get(chan1, QUEUE1, false)
-    @test result !== nothing
-    rcvd_msg = result
-    @test rcvd_msg.redelivered == false
-
-    basic_reject(chan1, rcvd_msg.delivery_tag; requeue=true)
-
-    result = basic_get(chan1, QUEUE1, false)
-    @test result !== nothing
-    rcvd_msg = result
-    @test rcvd_msg.redelivered == true
-
-    basic_ack(chan1, rcvd_msg.delivery_tag)
-
-    testlog("testing basic consumer...")
-    # start a consumer task
-    global msg_count = 0
-    consumer_fn = (rcvd_msg) -> begin
-        @test rcvd_msg.exchange == EXCG_DIRECT
-        @test rcvd_msg.redelivered == false
-        @test rcvd_msg.routing_key == ROUTE1
-        @test rcvd_msg.data == M.data
-        global msg_count
-        msg_count += 1
-        println("received msg $(msg_count): $(String(rcvd_msg.data))")
-        basic_ack(chan1, rcvd_msg.delivery_tag)
-    end
-    success, consumer_tag = basic_consume(chan1, QUEUE1, consumer_fn)
-    @test success
-
-    # publish 10 messages
-    for idx in 1:10
-        basic_publish(chan1, M; exchange=EXCG_DIRECT, routing_key=ROUTE1)
-    end
-
-    # wait for a reasonable time to receive all messages
-    for idx in 1:10
-        (msg_count == 10) && break
-        sleep(1)
-    end
-    @test msg_count == 10
-
-    # cancel the consumer task
-    @test basic_cancel(chan1, consumer_tag)
-
-    # test transactions
-    testlog("testing tx...")
-    @test tx_select(chan1)
-    @test tx_commit(chan1)
-    @test tx_rollback(chan1)
-
-    # test heartbeats
-    if 120 >= conn.conn.heartbeat > 0
-        c = conn.conn
-        testlog("testing heartbeats (waiting $(3*c.heartbeat) secs)...")
-        ts1 = c.heartbeat_time_server
-        tc1 = c.heartbeat_time_client
-        sleeptime = c.heartbeat/2
-        for idx in 1:6
-            (c.heartbeat_time_server > ts1) && (c.heartbeat_time_client > tc1) && break
-            sleep(sleeptime)
+            # create exchanges
+            @info("creating exchanges")
+            @test exchange_declare(chan1, EXCG_DIRECT, EXCHANGE_TYPE_DIRECT; arguments=Dict{String,Any}("Hello"=>"World", "Foo"=>"bar"))
+            @test exchange_declare(chan1, EXCG_FANOUT, EXCHANGE_TYPE_FANOUT)
+            # redeclaring the exchange with same attributes should be fine
+            @test exchange_declare(chan1, EXCG_FANOUT, EXCHANGE_TYPE_FANOUT)
+            # redeclaring an existing exchange with different attributes should fail
+            @test_throws AMQPClient.AMQPClientException exchange_declare(chan1, EXCG_FANOUT, EXCHANGE_TYPE_DIRECT)
         end
-        @test c.heartbeat_time_server > ts1
-        @test c.heartbeat_time_client > tc1
-    else
-        testlog("not testing heartbeats (wait too long at $(3*conn.conn.heartbeat) secs)")
+
+        chan_ref = nothing
+        # must reconnect as channel gets closed after a channel exception
+        channel(conn, AMQPClient.UNUSED_CHANNEL, true) do chan1
+            @test chan1.id == 1
+
+            # create and bind queues
+            @info("creating queues")
+            success, queue_name, message_count, consumer_count = queue_declare(chan1, QUEUE1)
+            @test success
+            @test message_count == 0
+            @test consumer_count == 0
+
+            @test queue_bind(chan1, QUEUE1, EXCG_DIRECT, ROUTE1)
+
+            # rabbitmq 3.6.5 does not support qos
+            # basic_qos(chan1, 1024*10, 10, false)
+
+            M = Message(Vector{UInt8}("hello world"), content_type="text/plain", delivery_mode=PERSISTENT)
+
+            @info("testing basic publish and get")
+            # publish 10 messages
+            for idx in 1:10
+                basic_publish(chan1, M; exchange=EXCG_DIRECT, routing_key=ROUTE1)
+                flush(chan1)
+                @test !isready(chan1.conn.sendq)
+            end
+
+            # basic get 10 messages
+            for idx in 1:10
+                result = basic_get(chan1, QUEUE1, false)
+                @test result !== nothing
+                rcvd_msg = result
+                basic_ack(chan1, rcvd_msg.delivery_tag)
+                @test rcvd_msg.remaining == (10-idx)
+                @test rcvd_msg.exchange == EXCG_DIRECT
+                @test rcvd_msg.redelivered == false
+                @test rcvd_msg.routing_key == ROUTE1
+                @test rcvd_msg.data == M.data
+                @test :content_type in keys(rcvd_msg.properties)
+                @test convert(String, rcvd_msg.properties[:content_type]) == "text/plain"
+            end
+
+            # basic get returns null if no more messages
+            @test basic_get(chan1, QUEUE1, false) === nothing
+
+            ## test reject and requeue
+            basic_publish(chan1, M; exchange=EXCG_DIRECT, routing_key=ROUTE1)
+
+            result = basic_get(chan1, QUEUE1, false)
+            @test result !== nothing
+            rcvd_msg = result
+            @test rcvd_msg.redelivered == false
+
+            basic_reject(chan1, rcvd_msg.delivery_tag; requeue=true)
+
+            result = basic_get(chan1, QUEUE1, false)
+            @test result !== nothing
+            rcvd_msg = result
+            @test rcvd_msg.redelivered == true
+
+            basic_ack(chan1, rcvd_msg.delivery_tag)
+
+            @info("testing basic consumer")
+            # start a consumer task
+            global msg_count = 0
+            consumer_fn = (rcvd_msg) -> begin
+                @test rcvd_msg.exchange == EXCG_DIRECT
+                @test rcvd_msg.redelivered == false
+                @test rcvd_msg.routing_key == ROUTE1
+                @test rcvd_msg.data == M.data
+                global msg_count
+                msg_count += 1
+                println("received msg $(msg_count): $(String(rcvd_msg.data))")
+                basic_ack(chan1, rcvd_msg.delivery_tag)
+            end
+            success, consumer_tag = basic_consume(chan1, QUEUE1, consumer_fn)
+            @test success
+
+            # publish 10 messages
+            for idx in 1:10
+                basic_publish(chan1, M; exchange=EXCG_DIRECT, routing_key=ROUTE1)
+            end
+
+            # wait for a reasonable time to receive all messages
+            for idx in 1:10
+                (msg_count == 10) && break
+                sleep(1)
+            end
+            @test msg_count == 10
+
+            # cancel the consumer task
+            @test basic_cancel(chan1, consumer_tag)
+
+            # test transactions
+            @info("testing tx")
+            @test tx_select(chan1)
+            @test tx_commit(chan1)
+            @test tx_rollback(chan1)
+
+            # test heartbeats
+            if 120 >= conn.conn.heartbeat > 0
+                c = conn.conn
+                @info("testing heartbeats (waiting $(3*c.heartbeat) secs)...")
+                ts1 = c.heartbeat_time_server
+                tc1 = c.heartbeat_time_client
+                sleeptime = c.heartbeat/2
+                for idx in 1:6
+                    (c.heartbeat_time_server > ts1) && (c.heartbeat_time_client > tc1) && break
+                    sleep(sleeptime)
+                end
+                @test c.heartbeat_time_server > ts1
+                @test c.heartbeat_time_client > tc1
+            else
+                @info("not testing heartbeats (wait too long at $(3*conn.conn.heartbeat) secs)")
+            end
+
+            @info("closing down")
+            success, message_count = queue_purge(chan1, QUEUE1)
+            @test success
+            @test message_count == 0
+
+            @test queue_unbind(chan1, QUEUE1, EXCG_DIRECT, ROUTE1)
+            success, message_count = queue_delete(chan1, QUEUE1)
+            @test success
+            @test message_count == 0
+
+            # delete exchanges
+            @test exchange_delete(chan1, EXCG_DIRECT; nowait=true)
+            @test exchange_delete(chan1, EXCG_FANOUT)
+
+            chan_ref = chan1 # to do additional tests on a closed channel
+        end
+
+        close(chan_ref) # closing a closed channel should not be an issue
+        AMQPClient.wait_for_state(chan_ref, AMQPClient.CONN_STATE_CLOSED)
+        @test !isopen(chan_ref)
+
+        conn_ref = conn  # to do additional tests on a closed connection
     end
 
-    testlog("closing down...")
-    success, message_count = queue_purge(chan1, QUEUE1)
-    @test success
-    @test message_count == 0
+    # closing a closed connection should not be an issue
+    close(conn_ref)
+    AMQPClient.wait_for_state(conn_ref, AMQPClient.CONN_STATE_CLOSED)
+    @test !isopen(conn_ref)
 
-    @test queue_unbind(chan1, QUEUE1, EXCG_DIRECT, ROUTE1)
-    success, message_count = queue_delete(chan1, QUEUE1)
-    @test success
-    @test message_count == 0
-
-    # delete exchanges
-    @test exchange_delete(chan1, EXCG_DIRECT; nowait=true)
-    @test exchange_delete(chan1, EXCG_FANOUT)
-
-    # close channels and connection
-    close(chan1)
-    AMQPClient.wait_for_state(chan1, AMQPClient.CONN_STATE_CLOSED)
-    @test !isopen(chan1)
-
-    close(conn)
-    AMQPClient.wait_for_state(conn, AMQPClient.CONN_STATE_CLOSED)
-    @test !isopen(conn)
-
-    testlog("done.")
+    @info("done")
     nothing
 end
 

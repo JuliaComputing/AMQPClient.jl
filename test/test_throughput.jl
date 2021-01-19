@@ -13,20 +13,19 @@ const no_ack = true
 
 const M = Message(rand(UInt8, 1024), content_type="application/octet-stream", delivery_mode=PERSISTENT)
 
-testlog(msg) = println(msg)
-
-function setup(;virtualhost="/", host="localhost", port=AMQPClient.AMQP_DEFAULT_PORT, auth_params=AMQPClient.DEFAULT_AUTH_PARAMS)
+function setup(;virtualhost="/", host="localhost", port=AMQPClient.AMQP_DEFAULT_PORT, auth_params=AMQPClient.DEFAULT_AUTH_PARAMS, tls=false)
     # open a connection
-    testlog("opening connection...")
-    conn = connection(;virtualhost=virtualhost, host=host, port=port, auth_params=auth_params)
+    @debug("opening connection")
+    amqps = tls ? amqps_configure() : nothing
+    conn = connection(;virtualhost=virtualhost, host=host, port=port, auth_params=auth_params, amqps=amqps)
 
     # open a channel
-    testlog("opening channel...")
+    @debug("opening channel")
     chan1 = channel(conn, AMQPClient.UNUSED_CHANNEL, true)
     @test chan1.id == 1
 
     # create and bind queues
-    testlog("creating queues...")
+    @debug("creating queues")
     success, name, message_count, consumer_count = queue_declare(chan1, QUEUE1)
     @test success
     @test message_count == 0
@@ -37,7 +36,7 @@ function setup(;virtualhost="/", host="localhost", port=AMQPClient.AMQP_DEFAULT_
 end
 
 function teardown(conn, chan1, delete=false)
-    testlog("closing down...")
+    @info("closing down")
     if delete
         success, message_count = queue_purge(chan1, QUEUE1)
         @test success
@@ -60,30 +59,28 @@ function teardown(conn, chan1, delete=false)
 end
 
 function publish(conn, chan1)
-    testlog("starting basic publisher...")
+    @info("starting basic publisher")
     # publish N messages
     for idx in 1:NMSGS
         basic_publish(chan1, M; exchange=EXCG_DIRECT, routing_key=ROUTE1)
         if (idx % 10000) == 0
-            println("publishing $idx ...")
+            @info("publishing", idx)
             sleep(1)
         end
     end
 end
 
 function consume(conn, chan1)
-    testlog("starting basic consumer...")
+    @info("starting basic consumer")
     # start a consumer task
-    global msg_count = 0
-    global start_time = time()
-    global end_time = 0
+    msg_count = 0
+    start_time = time()
+    end_time = 0
     consumer_fn = (rcvd_msg) -> begin
-        global msg_count
-        global end_time
         msg_count += 1
         if ((msg_count % 10000) == 0) || (msg_count == NMSGS)
             #basic_ack(chan1, 0; all_upto=true)
-            println("ack sent $msg_count ...")
+            @info("ack sent", msg_count)
         end
         no_ack || basic_ack(chan1, rcvd_msg.delivery_tag)
         if msg_count == NMSGS
@@ -95,7 +92,7 @@ function consume(conn, chan1)
 
     # wait to receive all messages
     while msg_count < NMSGS
-        println("$msg_count of $NMSGS messages processed")
+        @info("$msg_count of $NMSGS messages processed")
         sleep(2)
     end
 
@@ -104,47 +101,53 @@ function consume(conn, chan1)
 
     # time to send and receive
     total_time = max(end_time - start_time, 1)
-    println("time to send and receive $NMSGS messages: $(end_time - start_time) secs @ $(NMSGS/total_time) msgs per second")
+    @info("time to send and receive", message_count=NMSGS, total_time, rate=NMSGS/total_time)
 end
 
 function run_publisher()
-    conn, chan1 = AMQPTestThroughput.setup()
+    host = ARGS[2]
+    port = parse(Int, ARGS[3])
+    tls = parse(Bool, ARGS[4])
+    conn, chan1 = AMQPTestThroughput.setup(; host=host, port=port, tls=tls)
     AMQPTestThroughput.publish(conn, chan1)
     AMQPTestThroughput.teardown(conn, chan1, false) # exit without destroying queue
     nothing
 end
 
 function run_consumer()
-    conn, chan1 = AMQPTestThroughput.setup()
+    host = ARGS[2]
+    port = parse(Int, ARGS[3])
+    tls = parse(Bool, ARGS[4])
+    conn, chan1 = AMQPTestThroughput.setup(; host=host, port=port, tls=tls)
     AMQPTestThroughput.consume(conn, chan1)
-    println("waiting for publisher to exit gracefully...")
+    @debug("waiting for publisher to exit gracefully...")
     sleep(10)  # wait for publisher to exit gracefully
     AMQPTestThroughput.teardown(conn, chan1, true)
     nothing
 end
 
-function spawn_test(script, flags)
+function spawn_test(script, flags, host, port, tls)
     opts = Base.JLOptions()
     inline_flag = opts.can_inline == 1 ? `` : `--inline=no`
     cov_flag = (opts.code_coverage == 1) ? `--code-coverage=user` :
                  (opts.code_coverage == 2) ? `--code-coverage=all` :
                  ``
     srvrscript = joinpath(dirname(@__FILE__), script)
-    srvrcmd = `$(joinpath(JULIA_HOME, "julia")) $cov_flag $inline_flag $srvrscript $flags`
-    println("Running tests from ", script, "\n", "="^60)
+    srvrcmd = `$(joinpath(JULIA_HOME, "julia")) $cov_flag $inline_flag $srvrscript $flags $host $port $tls`
+    @debug("Running tests from ", script, flags, host, port, tls)
     ret = run(srvrcmd)
-    println("Finished ", script, "\n", "="^60)
+    @debug("Finished ", script, flags, host, port, tls)
     nothing
 end
 
-function runtests()
-    println("starting consumer")
-    consumer = @async spawn_test("test_throughput.jl", "--runconsumer")
-    sleep(10)
-    println("starting publisher")
-    publisher = @async spawn_test("test_throughput.jl", "--runpublisher")
-    wait(consumer)
-    wait(publisher)
+function runtests(; host="localhost", port=AMQPClient.AMQP_DEFAULT_PORT, tls=false)
+    @sync begin
+        @info("starting consumer")
+        consumer = @async spawn_test("test_throughput.jl", "--runconsumer", host, port, tls)
+        sleep(10)
+        @info("starting publisher")
+        publisher = @async spawn_test("test_throughput.jl", "--runpublisher", host, port, tls)
+    end
     nothing
 end
 

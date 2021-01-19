@@ -5,6 +5,7 @@
 
 const AMQP_VERSION = v"0.9.1"
 const AMQP_DEFAULT_PORT = 5672
+const AMQPS_DEFAULT_PORT = 5671
 
 # Constants
 const FrameMethod = 1
