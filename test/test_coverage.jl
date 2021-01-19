@@ -8,6 +8,7 @@ const EXCG_DIRECT = "ExcgDirect"
 const EXCG_FANOUT = "ExcgFanout"
 const QUEUE1 = "queue1"
 const ROUTE1 = "key1"
+const invalid_auth_params = Dict{String,Any}("MECHANISM"=>"AMQPLAIN", "LOGIN"=>randstring(10), "PASSWORD"=>randstring(10))
 
 function runtests(;virtualhost="/", host="localhost", port=AMQPClient.AMQP_DEFAULT_PORT, auth_params=AMQPClient.DEFAULT_AUTH_PARAMS, amqps=nothing)
     verify_spec()
@@ -15,6 +16,9 @@ function runtests(;virtualhost="/", host="localhost", port=AMQPClient.AMQP_DEFAU
     @test default_exchange_name("direct") == "amq.direct"
     @test default_exchange_name() == ""
     @test AMQPClient.method_name(AMQPClient.TAMQPMethodPayload(:Basic, :Ack, (1, false))) == "Basic.Ack"
+
+    # test failure on invalid auth_params
+    @test_throws AMQPClient.AMQPClientException connection(;virtualhost=virtualhost, host=host, port=port, amqps=amqps, auth_params=invalid_auth_params)
 
     conn_ref = nothing
 
