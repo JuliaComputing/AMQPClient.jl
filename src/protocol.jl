@@ -309,12 +309,13 @@ end
 # Async message handler framework begin
 # ----------------------------------------
 function wait_for_state(c, states; interval=1, timeout=typemax(Int))
-    t1 = time()
-    while !(c.state in states)
-        ((time() - t1) > timeout) && (return false)
-        sleep(interval)
+    timedwait(Float64(timeout); pollint=Float64(interval)) do
+        # if we are looking for open states, and connection gets closed in the meantime, it's an error, break out
+        conn_error = !(CONN_STATE_CLOSED in states) && (c.state == CONN_STATE_CLOSED)
+        state_found = (c.state in states)
+        conn_error || state_found
     end
-    true
+    c.state in states
 end
 
 function connection_processor(c, name, fn)
@@ -512,7 +513,11 @@ function channel(c::Connection, id::Integer, create::Bool; connect_timeout=DEFAU
             send_channel_open(chan)
 
             if !wait_for_state(chan, CONN_STATE_OPEN; timeout=connect_timeout)
-                throw(AMQPClientException("Channel handshake failed"))
+                error_message = "Channel handshake failed"
+                if nothing !== chan.closereason
+                    error_message = string(error_message, " - ", string(chan.closereason.code), " (", convert(String, chan.closereason.msg), ")")
+                end
+                throw(AMQPClientException(error_message))
             end
         end
     else
@@ -562,7 +567,11 @@ function connection(; virtualhost="/", host="localhost", port=AMQPClient.AMQP_DE
     flush(AMQPClient.sock(chan))
 
     if !AMQPClient.wait_for_state(conn, AMQPClient.CONN_STATE_OPEN; timeout=connect_timeout) || !AMQPClient.wait_for_state(chan, AMQPClient.CONN_STATE_OPEN; timeout=connect_timeout)
-        throw(AMQPClientException("Connection handshake failed"))
+        error_message = "Connection handshake failed"
+        if nothing !== chan.closereason
+            error_message = string(error_message, " - ", string(chan.closereason.code), " (", convert(String, chan.closereason.msg), ")")
+        end
+        throw(AMQPClientException(error_message))
     end
     chan
 end
