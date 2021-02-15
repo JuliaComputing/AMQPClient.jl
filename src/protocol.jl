@@ -354,7 +354,7 @@ function connection_processor(c, name, fn)
 end
 
 function connection_sender(c::Connection)
-    @debug("==> sending on conn", host=c.virtualhost)
+    @debug("==> sending on conn", host=c.host, port=c.port, virtualhost=c.virtualhost)
     nbytes = sendq_to_stream(sock(c), c.sendq)
     @debug("==> sent", nbytes)
     c.heartbeat_time_client = time()  # update heartbeat time for client
@@ -1084,6 +1084,7 @@ function on_connection_tune(chan::MessageChannel, m::TAMQPMethodFrame, ctx)
     conn.channelmax = m.payload.fields[1].second
     conn.framemax = m.payload.fields[2].second
     conn.heartbeat = m.payload.fields[3].second
+    @debug("got_connection_tune", channelmax=conn.channelmax, framemax=conn.framemax, heartbeat=conn.heartbeat)
     handle(chan, FrameHeartbeat, on_connection_heartbeat)
     send_connection_tune_ok(chan, ctx[:channelmax], ctx[:framemax], ctx[:heartbeat])
     handle(chan, :Connection, :Tune)
@@ -1095,16 +1096,18 @@ end
 function send_connection_tune_ok(chan::MessageChannel, channelmax=0, framemax=0, heartbeat=0)
     conn = chan.conn
 
-    # set channelmax and framemax
-    (channelmax > 0) && (conn.channelmax = channelmax)
-    (framemax > 0) && (conn.framemax = framemax)
-
-    # negotiate heartbeat (min of what expected by both parties)
-    if heartbeat > 0 && conn.heartbeat > 0
-        conn.heartbeat = min(conn.heartbeat, heartbeat)
-    else
-        conn.heartbeat = max(conn.heartbeat, heartbeat)
+    # negotiate (min of what expected by both parties)
+    function opt(desired_param, limited_param)
+        if desired_param > 0 && limited_param > 0
+            min(desired_param, limited_param)
+        else
+            max(desired_param, limited_param)
+        end
     end
+
+    conn.channelmax = opt(channelmax, conn.channelmax)
+    conn.framemax = opt(framemax, conn.framemax)
+    conn.heartbeat = opt(heartbeat, conn.heartbeat)
 
     @debug("send_connection_tune_ok", channelmax=conn.channelmax, framemax=conn.framemax, heartbeat=conn.heartbeat)
     send(chan, TAMQPMethodPayload(:Connection, :TuneOk, (conn.channelmax, conn.framemax, conn.heartbeat)))
