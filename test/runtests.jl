@@ -10,7 +10,14 @@ AMQPTestRPC.runtests()
 
 if length(ARGS) > 0
     amqps_host = ARGS[1]
-    AMQPTestCoverage.runtests(; host=amqps_host, port=AMQPClient.AMQPS_DEFAULT_PORT, amqps=amqps_configure())
+    virtualhost = ARGS[2]
+    port = AMQPClient.AMQPS_DEFAULT_PORT
+
+    login = ENV["AMQPPLAIN_LOGIN"]
+    password = ENV["AMQPPLAIN_PASSWORD"]
+    auth_params = Dict{String,Any}("MECHANISM"=>"AMQPLAIN", "LOGIN"=>login, "PASSWORD"=>password)
+
+    AMQPTestCoverage.runtests(; host=amqps_host, port=AMQPClient.AMQPS_DEFAULT_PORT, virtualhost=virtualhost, amqps=amqps_configure(), auth_params=auth_params)
     AMQPTestThroughput.runtests(; host=amqps_host, port=AMQPClient.AMQPS_DEFAULT_PORT, tls=true)
     AMQPTestRPC.runtests(; host=amqps_host, port=AMQPClient.AMQPS_DEFAULT_PORT, amqps=amqps_configure())
 end
