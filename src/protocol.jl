@@ -543,7 +543,7 @@ function connection(; virtualhost="/", host="localhost", port=AMQPClient.AMQP_DE
         auth_params=AMQPClient.DEFAULT_AUTH_PARAMS,
         channelmax::Integer=AMQPClient.DEFAULT_CHANNELMAX,
         connect_timeout=AMQPClient.DEFAULT_CONNECT_TIMEOUT,
-        amqps::Union{MbedTLS.SSLConfig,Nothing})
+        amqps::Union{MbedTLS.SSLConfig,Nothing}=nothing)
     @debug("connecting", host, port, virtualhost)
     conn = Connection(; virtualhost=virtualhost, host=host, port=port, send_queue_size=send_queue_size)
     chan = channel(conn, AMQPClient.DEFAULT_CHANNEL, true)
