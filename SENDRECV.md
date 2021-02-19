@@ -33,43 +33,41 @@ A message received from a queue can also have the following attributes:
 | remaining        | Int32       | Number of messages remaining in the queue.                                                                        |
 
 
-````julia
+```julia
 # create a message with 10 bytes of random value as data
 msg =  Message(rand(UInt8, 10))
 
 # create a persistent plain text message
-data = convert(Vector{UInt8}, "hello world")
+data = convert(Vector{UInt8}, codeunits("hello world"))
 msg = Message(data, content_type="text/plain", delivery_mode=PERSISTENT)
-````
+```
 
 Messages are published to an exchange, optionally specifying a routing key.
 
-````julia
+```julia
 EXCG_DIRECT = "MyDirectExcg"
 ROUTE1 = "routingkey1"
 
 basic_publish(chan1, msg; exchange=EXCG_DIRECT, routing_key=ROUTE1)
-````
+```
 
 To poll a queue for messages:
 
-````julia
-maybe_msg = basic_get(chan1, QUEUE1, false)
+```julia
+msg = basic_get(chan1, QUEUE1, false)
 
 # check if we got a message
-if !isnull(maybe_msg)
-    msg = get(maybe_msg)
-
+if msg !== nothing
     # process msg...
 
     # acknowledge receipt
     basic_ack(chan1, msg.delivery_tag)
 end
-````
+```
 
 To subscribe for messages (register an asynchronous callback):
 
-````julia
+```julia
 # define a callback function to process messages
 function consumer(msg)
     # process msg...
@@ -89,4 +87,4 @@ println("consumer registered with tag $consumer_tag")
 
 # unsubscribe the consumer from the queue
 basic_cancel(chan1, consumer_tag)
-````
+```
