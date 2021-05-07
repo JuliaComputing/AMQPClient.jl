@@ -938,9 +938,11 @@ end
 
 function confirm_select(chan::MessageChannel; nowait::Bool=false, timeout::Int=DEFAULT_TIMEOUT)
     _wait_resp(chan, true, nowait, on_confirm_select_ok, :Confirm, :SelectOk, false, timeout) do
-        send_confirm_select(chan, nowait)
+        send_confirm_select(chan)
     end
 end
+
+send_confirm_select(chan::MessageChannel) = send(chan, TAMQPMethodPayload(:Confirm, :Select, ()))
 
 # ----------------------------------------
 # Confirm end
