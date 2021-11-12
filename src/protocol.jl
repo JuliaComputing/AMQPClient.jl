@@ -267,6 +267,7 @@ get_property(c::Connection, s::Symbol, default) = get(c.properties, s, default)
 send(c::MessageChannel, f, msgframes::Vector=[]) = send(c.conn, f, msgframes)
 function send(c::Connection, f, msgframes::Vector=[])
     #uncomment to enable synchronization (not required till we have preemptive tasks or threads)
+    @debug("queing messageframes", nframes=length(msgframes))
     lck = take!(c.sendlck)
     try
         put!(c.sendq, TAMQPGenericFrame(f))
@@ -274,6 +275,7 @@ function send(c::Connection, f, msgframes::Vector=[])
             put!(c.sendq, TAMQPGenericFrame(m))
         end
     finally
+        @debug("queued messageframes", nqueued=length(c.sendq.data))
         put!(c.sendlck, lck)
     end
     nothing
@@ -292,10 +294,17 @@ function send(c::MessageChannel, payload::TAMQPMethodPayload, msg::Union{Message
         # send one or more message body frames
         offset = 1
         msglen = length(message.data)
+        framemax = c.conn.framemax
+        if framemax <= 0
+            errormsg = (c.conn.state == CONN_STATE_OPEN) ? "Unexpected framemax ($framemax) value for connection" : "Connection closed"
+            throw(AMQPClientException(errormsg))
+        end
+
         while offset <= msglen
-            msgend = min(msglen, offset + c.conn.framemax - 1)
+            msgend = min(msglen, offset + framemax - 1)
             bodypayload = TAMQPBodyPayload(message.data[offset:msgend])
             offset = msgend + 1
+            @debug("sending", msglen, offset)
             push!(msgframes, TAMQPContentBodyFrame(frameprop, bodypayload))
         end
 
@@ -303,6 +312,7 @@ function send(c::MessageChannel, payload::TAMQPMethodPayload, msg::Union{Message
     else
         send(c, TAMQPMethodFrame(frameprop, payload))
     end
+    @debug("sent", methodname=method_name(payload))
 end
 
 # ----------------------------------------
