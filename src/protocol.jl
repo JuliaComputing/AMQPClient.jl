@@ -295,6 +295,9 @@ function send(c::MessageChannel, payload::TAMQPMethodPayload, msg::Union{Message
         offset = 1
         msglen = length(message.data)
         while offset <= msglen
+            if c.conn.framemax < 1
+                throw(AMQPClientException("Unexpected framemax setting ($(c.conn.framemax)) for connection. Connection is likely closed or invalid."))
+            end
             msgend = min(msglen, offset + c.conn.framemax - 1)
             bodypayload = TAMQPBodyPayload(message.data[offset:msgend])
             offset = msgend + 1
