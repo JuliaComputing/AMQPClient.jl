@@ -1,7 +1,7 @@
 # AMQPClient
 
-[![Build Status](https://travis-ci.org/JuliaComputing/AMQPClient.jl.svg?branch=master)](https://travis-ci.org/JuliaComputing/AMQPClient.jl)
-[![Coverage Status](https://coveralls.io/repos/JuliaComputing/AMQPClient.jl/badge.svg?branch=master&service=github)](https://coveralls.io/github/JuliaComputing/AMQPClient.jl?branch=master)
+[![Build Status](https://github.com/JuliaComputing/AMQPClient.jl/workflows/CI/badge.svg)](https://github.com/JuliaComputing/AMQPClient.jl/actions?query=workflow%3ACI+branch%3Amaster)
+[![codecov.io](http://codecov.io/github/JuliaComputing/AMQPClient.jl/coverage.svg?branch=master)](http://codecov.io/github/JuliaComputing/AMQPClient.jl?branch=master)
 
 A Julia [AMQP (Advanced Message Queuing Protocol)](http://www.amqp.org/) Client.
 
