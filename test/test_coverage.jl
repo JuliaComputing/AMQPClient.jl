@@ -10,7 +10,7 @@ const QUEUE1 = "queue1"
 const ROUTE1 = "key1"
 const invalid_auth_params = Dict{String,Any}("MECHANISM"=>"AMQPLAIN", "LOGIN"=>randstring(10), "PASSWORD"=>randstring(10))
 
-function runtests(;virtualhost="/", host="localhost", port=AMQPClient.AMQP_DEFAULT_PORT, auth_params=AMQPClient.DEFAULT_AUTH_PARAMS, amqps=nothing)
+function runtests(;virtualhost="/", host="localhost", port=AMQPClient.AMQP_DEFAULT_PORT, auth_params=AMQPClient.DEFAULT_AUTH_PARAMS, amqps=nothing, keepalive=true, heartbeat=true)
     verify_spec()
     test_types()
     @test default_exchange_name("direct") == "amq.direct"
@@ -24,7 +24,7 @@ function runtests(;virtualhost="/", host="localhost", port=AMQPClient.AMQP_DEFAU
 
     # open a connection
     @info("opening connection")
-    connection(;virtualhost=virtualhost, host=host, port=port, amqps=amqps, auth_params=auth_params, send_queue_size=512) do conn
+    connection(;virtualhost=virtualhost, host=host, port=port, amqps=amqps, auth_params=auth_params, send_queue_size=512, keepalive=keepalive, heartbeat=heartbeat) do conn
         @test conn.conn.sendq.sz_max == 512
 
         # open a channel
@@ -159,6 +159,8 @@ function runtests(;virtualhost="/", host="localhost", port=AMQPClient.AMQP_DEFAU
                 end
                 @test c.heartbeat_time_server > ts1
                 @test c.heartbeat_time_client > tc1
+            elseif conn.conn.heartbeat == 0
+                @info("heartbeat disabled")
             else
                 @info("not testing heartbeats (wait too long at $(3*conn.conn.heartbeat) secs)")
             end
