@@ -239,6 +239,31 @@ function test_types()
     mframe = AMQPClient.TAMQPMethodFrame(mfprop, mpayload)
     show(iob, mframe)
     @test length(take!(iob)) > 0
+
+    fields = AMQPClient.TAMQPFieldValue[
+        AMQPClient.TAMQPFieldValue(true),
+        AMQPClient.TAMQPFieldValue(1.1),
+        AMQPClient.TAMQPFieldValue(1),
+        AMQPClient.TAMQPFieldValue("hello world"),
+        AMQPClient.TAMQPFieldValue(Dict{String,Int}("one"=>1, "two"=>2)),
+    ]
+
+    fieldarray = AMQPClient.TAMQPFieldArray(fields)
+    simplified_fields = AMQPClient.simplify(fieldarray)
+    @test simplified_fields == Any[
+        0x01,
+        1.1,
+        1,
+         "hello world",
+         Dict{String, Any}("two" => 2, "one" => 1)
+    ]
+
+    iob = PipeBuffer()
+    write(iob, hton(AMQPClient.TAMQPLongUInt(10)))
+    write(iob, UInt8[1,2,3,4,5,6,7,8,9,0])
+    barr = read(iob, AMQPClient.TAMQPByteArray)
+    @test barr.len == 10
+    @test barr.data == UInt8[1,2,3,4,5,6,7,8,9,0]
 end
 
 end # module AMQPTestCoverage

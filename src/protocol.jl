@@ -287,55 +287,49 @@ isopen(c::MessageChannel) = isopen(c.conn) && (c.id in keys(c.conn.channels))
 get_property(c::MessageChannel, s::Symbol, default) = get_property(c.conn, s, default)
 get_property(c::Connection, s::Symbol, default) = get(c.properties, s, default)
 
-send(c::MessageChannel, f, msgframes::Vector=[]) = send(c.conn, f, msgframes)
-function send(c::Connection, f, msgframes::Vector=[])
-    #uncomment to enable synchronization (not required till we have preemptive tasks or threads)
-    @debug("queing messageframes", nframes=length(msgframes))
-    lck = take!(c.sendlck)
+with_sendlock(f, c::MessageChannel) = with_sendlock(f, c.conn)
+with_sendlock(f, c::Connection) = with_sendlock(f, c.sendlck)
+function with_sendlock(f, sendlck::Channel{UInt8})
+    lck = take!(sendlck)
     try
-        put!(c.sendq, TAMQPGenericFrame(f))
-        for m in msgframes
-            put!(c.sendq, TAMQPGenericFrame(m))
-        end
+        f()
     finally
-        @debug("queued messageframes", nqueued=length(c.sendq.data))
-        put!(c.sendlck, lck)
+        put!(sendlck, lck)
     end
-    nothing
 end
-function send(c::MessageChannel, payload::TAMQPMethodPayload, msg::Union{Message, Nothing}=nothing)
-    @debug("sending", methodname=method_name(payload), hascontent=(msg !== nothing))
+send(c::MessageChannel, f) = send(c.conn, f)
+send(c::Connection, f) = put!(c.sendq, TAMQPGenericFrame(f))
+function send(c::MessageChannel, payload::TAMQPMethodPayload)
+    @debug("sending without content", methodname=method_name(payload))
     frameprop = TAMQPFrameProperties(c.id,0)
-    if msg !== nothing
-        msgframes = []
-        message = msg
+    send(c, TAMQPMethodFrame(frameprop, payload))
+end
+function send(c::MessageChannel, payload::TAMQPMethodPayload, msg::Message)
+    @debug("sending with content", methodname=method_name(payload))
+    frameprop = TAMQPFrameProperties(c.id,0)
+    framemax = c.conn.framemax
+    if framemax <= 0
+        errormsg = (c.conn.state == CONN_STATE_OPEN) ? "Unexpected framemax ($framemax) value for connection" : "Connection closed"
+        throw(AMQPClientException(errormsg))
+    end
 
-        # send message header frame
-        hdrpayload = TAMQPHeaderPayload(payload.class, message)
-        push!(msgframes, TAMQPContentHeaderFrame(frameprop, hdrpayload))
+    with_sendlock(c) do
+        send(c, TAMQPMethodFrame(frameprop, payload))
+        hdrpayload = TAMQPHeaderPayload(payload.class, msg)
+        send(c, TAMQPContentHeaderFrame(frameprop, hdrpayload))
 
         # send one or more message body frames
         offset = 1
-        msglen = length(message.data)
-        framemax = c.conn.framemax
-        if framemax <= 0
-            errormsg = (c.conn.state == CONN_STATE_OPEN) ? "Unexpected framemax ($framemax) value for connection" : "Connection closed"
-            throw(AMQPClientException(errormsg))
-        end
-
+        msglen = length(msg.data)
+        @debug("sending message with content body", msglen)
         while offset <= msglen
             msgend = min(msglen, offset + framemax - 1)
-            bodypayload = TAMQPBodyPayload(message.data[offset:msgend])
+            bodypayload = TAMQPBodyPayload(msg.data[offset:msgend])
             offset = msgend + 1
-            @debug("sending", msglen, offset)
-            push!(msgframes, TAMQPContentBodyFrame(frameprop, bodypayload))
+            @debug("sending content body frame", msglen, offset)
+            send(c, TAMQPContentBodyFrame(frameprop, bodypayload))
         end
-
-        send(c, TAMQPMethodFrame(frameprop, payload), msgframes)
-    else
-        send(c, TAMQPMethodFrame(frameprop, payload))
     end
-    @debug("sent", methodname=method_name(payload))
 end
 
 # ----------------------------------------
