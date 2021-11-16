@@ -16,12 +16,12 @@ include("test_rpc.jl")
                 end
             end
         end
-        # @testset "Throughput" begin
-        #     AMQPTestThroughput.runtests()
-        # end
-        # @testset "RPC" begin
-        #     AMQPTestRPC.runtests()
-        # end
+        @testset "Throughput" begin
+            AMQPTestThroughput.runtests()
+        end
+        @testset "RPC" begin
+            AMQPTestRPC.runtests()
+        end
     end
 
     if length(ARGS) > 0

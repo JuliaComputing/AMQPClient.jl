@@ -76,6 +76,7 @@ end
 TAMQPFieldValue(v::T) where {T} = TAMQPFieldValue{T}(FieldIndicatorMap[T], v)
 TAMQPFieldValue(v::Dict) = TAMQPFieldValue(TAMQPFieldTable(v))
 TAMQPFieldValue(v::String) = TAMQPFieldValue(TAMQPLongStr(v))
+TAMQPFieldValue(v::Bool) = TAMQPFieldValue('b', TAMQPBool(v))
 
 struct TAMQPFieldValuePair{T <: TAMQPFV}
     name::TAMQPFieldName
