@@ -46,7 +46,7 @@ function fill_in(bio::BufferedTLSSocket, atleast::Int)
         while (atleast > avail) && isopen(bio.sock)
             bytes_read = isreadable(bio.sock) ? readbytes!(bio.sock, bio.readbuff; all=false) : 0
             if bytes_read > 0
-                avail += Base.write_sub(bio.in, bio.readbuff, 1, bytes_read)
+                avail += Base.write(bio.in, first(bio.readbuff, bytes_read))
             else
                 MbedTLS.wait_for_decrypted_data(bio.sock)
             end
