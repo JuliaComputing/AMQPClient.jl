@@ -3,7 +3,7 @@ uuid = "79c8b4cd-a41a-55fa-907c-fab5288e1383"
 keywords = ["amqpclient", "rabbitmq", "amqp", "amqp-client", "message-queue"]
 license = "MIT"
 desc = "A Julia AMQP (Advanced Message Queuing Protocol) / RabbitMQ Client."
-version = "0.4.3"
+version = "0.4.4"
 
 [deps]
 Logging = "56ddb016-857b-54e1-b83d-db4d58db5568"
