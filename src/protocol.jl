@@ -1374,11 +1374,33 @@ function on_basic_get_empty_or_ok(chan::MessageChannel, m::TAMQPMethodFrame, ctx
     nothing
 end
 
+function on_channel_message_completed(chan::MessageChannel, msg::Message)
+    # got all data for msg
+    if isempty(msg.consumer_tag)
+        put!(chan.chan_get, pop!(chan.partial_msgs))
+    else
+        lock(chan.lck) do
+            if msg.consumer_tag in keys(chan.consumers)
+                put!(chan.consumers[msg.consumer_tag].recvq, pop!(chan.partial_msgs))
+            else
+                put!(get!(()->Channel{Message}(typemax(Int)), chan.pending_msgs, msg.consumer_tag), msg)
+                @debug("holding message, no consumer yet with tag", tag=msg.consumer_tag)
+            end
+        end
+    end
+    nothing
+end
+
 function on_channel_message_in(chan::MessageChannel, m::TAMQPContentHeaderFrame, ctx)
     msg = last(chan.partial_msgs)
     msg.properties = m.hdrpayload.proplist
     msg.data = Vector{UInt8}(undef, m.hdrpayload.bodysize)
     msg.filled = 0
+
+    if m.hdrpayload.bodysize == 0
+        # got all data for msg
+        on_channel_message_completed(chan, msg)
+    end
     nothing
 end
 
@@ -1392,18 +1414,7 @@ function on_channel_message_in(chan::MessageChannel, m::TAMQPContentBodyFrame, c
 
     if msg.filled >= length(msg.data)
         # got all data for msg
-        if isempty(msg.consumer_tag)
-            put!(chan.chan_get, pop!(chan.partial_msgs))
-        else
-            lock(chan.lck) do
-                if msg.consumer_tag in keys(chan.consumers)
-                    put!(chan.consumers[msg.consumer_tag].recvq, pop!(chan.partial_msgs))
-                else
-                    put!(get!(()->Channel{Message}(typemax(Int)), chan.pending_msgs, msg.consumer_tag), msg)
-                    @debug("holding message, no consumer yet with tag", tag=msg.consumer_tag)
-                end
-            end
-        end
+        on_channel_message_completed(chan, msg)
     end
 
     nothing

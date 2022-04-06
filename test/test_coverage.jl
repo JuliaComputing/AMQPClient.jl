@@ -116,9 +116,13 @@ function runtests(;virtualhost="/", host="localhost", port=AMQPClient.AMQP_DEFAU
                 @test rcvd_msg.exchange == EXCG_DIRECT
                 @test rcvd_msg.redelivered == false
                 @test rcvd_msg.routing_key == ROUTE1
-                @test rcvd_msg.data == M.data
                 global msg_count
                 msg_count += 1
+                if msg_count <= 10
+                    @test rcvd_msg.data == M.data
+                else
+                    @test rcvd_msg.data == UInt8[]
+                end
                 println("received msg $(msg_count): $(String(rcvd_msg.data))")
                 basic_ack(chan1, rcvd_msg.delivery_tag)
             end
@@ -136,6 +140,23 @@ function runtests(;virtualhost="/", host="localhost", port=AMQPClient.AMQP_DEFAU
                 sleep(1)
             end
             @test msg_count == 10
+
+            @info("testing empty messages")
+            # Test sending and receiving empty message
+            M_empty = Message(Vector{UInt8}(), content_type="text/plain", delivery_mode=PERSISTENT)
+            basic_publish(chan1, M_empty; exchange=EXCG_DIRECT, routing_key=ROUTE1)
+
+            M_no_ct = Message(Vector{UInt8}(), delivery_mode=PERSISTENT)
+            basic_publish(chan1, M_no_ct; exchange=EXCG_DIRECT, routing_key=ROUTE1)
+
+            println("Waiting")
+            # wait for a reasonable time to receive last two messages
+            for idx in 1:5
+                (msg_count == 12) && break
+                sleep(1)
+            end
+            println("Waited")
+            @test msg_count == 12
 
             # cancel the consumer task
             @test basic_cancel(chan1, consumer_tag)
