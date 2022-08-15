@@ -354,10 +354,8 @@ function connection_processor(c, name, fn)
     catch err
         reason = "$name task exiting."
         if isa(c, MessageConsumer)
-            if !(c.state in (CONN_STATE_CLOSING, CONN_STATE_CLOSED))
-                reason = reason * " Unhandled exception: $err"
-                @warn(reason, exception=(err,catch_backtrace()))
-            end
+            reason = reason * " Unhandled exception: $err"
+            @warn(reason, exception=(err,catch_backtrace()))
             close(c)
         else
             isconnclosed = !isopen(c)
