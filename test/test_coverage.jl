@@ -13,6 +13,15 @@ const invalid_auth_params = Dict{String,Any}("MECHANISM"=>"AMQPLAIN", "LOGIN"=>r
 function runtests(;virtualhost="/", host="localhost", port=AMQPClient.AMQP_DEFAULT_PORT, auth_params=AMQPClient.DEFAULT_AUTH_PARAMS, amqps=nothing, keepalive=true, heartbeat=true)
     verify_spec()
     test_types()
+    test_queue_expire(;
+        virtualhost=virtualhost,
+        host=host,
+        port=port,
+        auth_params=auth_params,
+        amqps=amqps,
+        keepalive=keepalive,
+        heartbeat=heartbeat)
+
     @test default_exchange_name("direct") == "amq.direct"
     @test default_exchange_name() == ""
     @test AMQPClient.method_name(AMQPClient.TAMQPMethodPayload(:Basic, :Ack, (1, false))) == "Basic.Ack"
@@ -288,6 +297,52 @@ function test_types()
     barr = read(iob, AMQPClient.TAMQPByteArray)
     @test barr.len == 10
     @test barr.data == UInt8[1,2,3,4,5,6,7,8,9,0]
+end
+
+function test_queue_expire(;virtualhost="/", host="localhost", port=AMQPClient.AMQP_DEFAULT_PORT, auth_params=AMQPClient.DEFAULT_AUTH_PARAMS, amqps=nothing, keepalive=true, heartbeat=true)
+    @info("testing create queue and queue expire with TTL")
+    # open a connection
+    @info("opening connection")
+    conn_ref = nothing
+    chan_ref = nothing
+    connection(;virtualhost=virtualhost, host=host, port=port, amqps=amqps, auth_params=auth_params, send_queue_size=512, keepalive=keepalive, heartbeat=heartbeat) do conn
+        # open a channel
+        @info("opening channel")
+        channel(conn, AMQPClient.UNUSED_CHANNEL, true) do chan1
+            @test chan1.id == 1
+
+            # test queue create and expire
+            expires_ms = 10 * 1000  # 10 seconds
+            success, queue_name, message_count, consumer_count = queue_declare(chan1, QUEUE1, arguments=Dict{String,Any}("x-expires"=>expires_ms))
+            @test success
+            @test message_count == 0
+            @test consumer_count == 0
+
+            exchange_name = default_exchange_name("direct")
+            # queue bind should be successful when queue not expired
+            @test queue_bind(chan1, QUEUE1, exchange_name, ROUTE1)
+
+            # wait for queue to expire, and a subsequent bind should fail
+            sleep(2 + expires_ms/1000)
+            @test_throws AMQPClient.AMQPClientException queue_bind(chan1, QUEUE1, exchange_name, ROUTE1)
+
+            chan_ref = chan1 # to do additional tests on a closed channel
+        end
+
+        # close(chan_ref) # closing a closed channel should not be an issue
+        AMQPClient.wait_for_state(chan_ref, AMQPClient.CONN_STATE_CLOSED)
+        @test !isopen(chan_ref)
+
+        conn_ref = conn  # to do additional tests on a closed connection
+    end
+
+    # closing a closed connection should not be an issue
+    # close(conn_ref)
+    AMQPClient.wait_for_state(conn_ref, AMQPClient.CONN_STATE_CLOSED)
+    @test !isopen(conn_ref)
+
+    @info("done")
+    nothing
 end
 
 end # module AMQPTestCoverage
