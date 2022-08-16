@@ -51,10 +51,16 @@ function read(io::IO, ::Type{TAMQPFieldValue})
     c = read(io, Char)
     v = read(io, FieldValueIndicatorMap[c])
     T = FieldValueIndicatorMap[c]
+    if T <: Integer
+        v = ntoh(v)
+    end
     TAMQPFieldValue{T}(c, v)
 end
 
-write(io::IO, fv::TAMQPFieldValue) = write(io, fv.typ, fv.fld)
+function write(io::IO, fv::TAMQPFieldValue)
+    v = isa(fv.fld, Integer) ? hton(fv.fld) : fv.fld
+    write(io, fv.typ, v)
+end
 
 read(io::IO, ::Type{TAMQPFieldValuePair}) = TAMQPFieldValuePair(read(io, TAMQPFieldName), read(io, TAMQPFieldValue))
 
