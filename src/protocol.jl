@@ -672,7 +672,7 @@ function connection(; virtualhost="/", host="localhost", port=AMQPClient.AMQP_DE
         end
         throw(AMQPClientException(error_message))
     end
-    chan
+    conn
 end
 
 function connection(f; kwargs...)

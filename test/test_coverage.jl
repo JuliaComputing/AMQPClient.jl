@@ -25,13 +25,16 @@ function runtests(;virtualhost="/", host="localhost", port=AMQPClient.AMQP_DEFAU
     # open a connection
     @info("opening connection")
     connection(;virtualhost=virtualhost, host=host, port=port, amqps=amqps, auth_params=auth_params, send_queue_size=512, keepalive=keepalive, heartbeat=heartbeat) do conn
-        @test conn.conn.sendq.sz_max == 512
+        # Issue #51
+        @test isa(conn, AMQPClient.Connection)
+
+        @test conn.sendq.sz_max == 512
 
         # open a channel
         @info("opening channel")
         channel(conn, AMQPClient.UNUSED_CHANNEL, true) do chan1
             @test chan1.id == 1
-            @test conn.conn.sendq.sz_max == 512
+            @test conn.sendq.sz_max == 512
 
             # test default exchange names
             @test default_exchange_name() == ""
@@ -168,8 +171,8 @@ function runtests(;virtualhost="/", host="localhost", port=AMQPClient.AMQP_DEFAU
             @test tx_rollback(chan1)
 
             # test heartbeats
-            if 120 >= conn.conn.heartbeat > 0
-                c = conn.conn
+            if 120 >= conn.heartbeat > 0
+                c = conn
                 @info("testing heartbeats (waiting $(3*c.heartbeat) secs)...")
                 ts1 = c.heartbeat_time_server
                 tc1 = c.heartbeat_time_client
@@ -180,10 +183,10 @@ function runtests(;virtualhost="/", host="localhost", port=AMQPClient.AMQP_DEFAU
                 end
                 @test c.heartbeat_time_server > ts1
                 @test c.heartbeat_time_client > tc1
-            elseif conn.conn.heartbeat == 0
+            elseif conn.heartbeat == 0
                 @info("heartbeat disabled")
             else
-                @info("not testing heartbeats (wait too long at $(3*conn.conn.heartbeat) secs)")
+                @info("not testing heartbeats (wait too long at $(3*conn.heartbeat) secs)")
             end
 
             @info("closing down")
