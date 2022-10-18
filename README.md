@@ -21,3 +21,6 @@ Note: These documents may not mention all implemented APIs yet. Please look at t
 
 - [AMQP v0.9.1](http://www.amqp.org/resources/download)
 - [RabbitMQ Extensions](https://www.rabbitmq.com/extensions.html)
+
+### Examples
+Julia code examples from [RabbitMQ tutorials](https://www.rabbitmq.com/getstarted.html) can be found in [rabbitmq/rabbitmq-tutorials](https://github.com/rabbitmq/rabbitmq-tutorials/tree/main/julia) repository.
